@@ -238,7 +238,7 @@ def main():
     # Calculate paths
     path_total_weights = graph_builder.collect_path_total_weights(df_distant_residues)
     sorted_paths = sorted(path_total_weights, key=lambda x: x[1], reverse=True)
-    with open("output.txt", "w") as file:
+    with open("paths.txt", "w") as file:
         for path, total_weight in sorted_paths[:numpath]:
             file.write(f"Path: {path}, Total Weight: {total_weight}\n")
     top_pathways = [path for path, _ in sorted_paths[:numpath]]
