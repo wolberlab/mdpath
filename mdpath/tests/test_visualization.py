@@ -6,6 +6,9 @@ import networkx as nx
 from unittest.mock import MagicMock, patch, mock_open
 from mdpath.src.visualization import MDPathVisualize
 import MDAnalysis as mda
+from io import StringIO
+import sys
+import glob
 
 
 def create_mock_pdb(content: str) -> str:
@@ -266,3 +269,34 @@ def test_assign_generic_numbers(mock_open_file, mock_post):
     mock_open_file.assert_any_call(pdb_file_path, "rb")
     mock_open_file.assert_any_call(output_file_path, "w")
     mock_open_file().write.assert_called_once_with("mock_pdb_content")
+
+def test_mdpath_spline(tmp_path):
+    current_directory = os.getcwd()
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    json_file = os.path.join(script_dir, "quick_precomputed_clusters_paths_tools.json")
+
+    sys.argv = [
+        "mdpath_spline",
+        "-json",
+        json_file,
+    
+    ]
+    original_stdout = sys.stdout
+    sys.stdout = StringIO()
+
+    try:
+
+        from mdpath.mdpath_tools import spline
+    
+        spline()
+   
+        cluster_meshes_directory = os.path.join(current_directory, "cluster_meshes")
+        if os.path.isdir(cluster_meshes_directory):
+            generated_files = glob.glob(os.path.join(cluster_meshes_directory, "*"))
+        else:
+            generated_files = []
+            assert len(generated_files) > 0, "No files were generated in the cluster_meshes directory."
+
+    finally:
+        sys.stdout = original_stdout
+
