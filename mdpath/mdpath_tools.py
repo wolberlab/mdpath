@@ -463,3 +463,197 @@ def spline():
     args = parser.parse_args()
     json_file = args.json
     MDPathVisualize.create_splines(json_file)
+
+def domain_mi_analysis():
+    """
+    Analyze mutual information within and between protein domains.
+    
+    This function provides a command-line interface (CLI) for analyzing mutual information
+    patterns in protein interaction networks, segmented by domains. It calculates both
+    intra-domain MI (within domains) and inter-domain MI (between domain pairs).
+    It can be called using 'mdpath_domain_mi' after installation.
+    
+    Command-line inputs:
+        -graph (str): Path to the graph.pkl file containing the network (from main workflow)
+        
+        -config (str): Path to the config.csv file defining domain segmentation (use test example)
+        
+        -output (str): Path to save the results CSV file (default: './mi_analysis_results.csv')
+    
+    Command-line usage:
+        $ mdpath_domain_mi -graph <path_to_graph.pkl> -config <path_to_config.csv>
+        
+        $ mdpath_domain_mi -graph <path_to_graph.pkl> -config <path_to_config.csv> -output <output_path>
+    """
+    import pickle
+    import networkx as nx
+    import pandas as pd
+    
+    parser = argparse.ArgumentParser(
+        prog="mdpath_domain_mi",
+        description="Analyze mutual information within and between protein domains.",
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+    parser.add_argument(
+        "-graph",
+        dest="graph",
+        help="Path to the graph.pkl file",
+        required=True,
+    )
+    parser.add_argument(
+        "-config",
+        dest="config",
+        help="Path to the config.csv file with domain definitions",
+        required=True,
+    )
+    parser.add_argument(
+        "-output",
+        dest="output",
+        help="Path to save the results CSV file",
+        default="./mi_analysis_results.csv",
+        required=False,
+    )
+    
+    args = parser.parse_args()
+    
+    if not args.graph or not args.config:
+        print("Both -graph and -config are required for domain MI analysis.")
+        exit(1)
+    
+    # change to joblib if needed in the future
+    print(f"Loading graph from {args.graph}...")
+    with open(args.graph, "rb") as pkl_file:
+        Graph = pickle.load(pkl_file)
+    
+    print(f"Loading domain configuration from {args.config}...")
+    Segmentation = pd.read_csv(args.config)
+    
+    # Helper functions
+    def parse_residue_range(residue_str):
+        """Parse residue range string like '1-50' into tuple (1, 50)"""
+        start, end = residue_str.split('-')
+        return int(start), int(end)
+    
+    def get_residues_in_domain(domain_row):
+        """Get list of residues for a given domain"""
+        start, end = parse_residue_range(domain_row['Residues'])
+        return list(range(start, end + 1))
+    
+    def residue_to_domain(residue, segmentation):
+        """Find which domain a residue belongs to"""
+        for idx, row in segmentation.iterrows():
+            start, end = parse_residue_range(row['Residues'])
+            if start <= residue <= end:
+                return row['Domain']
+        return None
+    
+    # Parse domains
+    domains = {}
+    for idx, row in Segmentation.iterrows():
+        domain_name = row['Domain']
+        residues = get_residues_in_domain(row)
+        domains[domain_name] = residues
+    
+    print(f"\nLoaded {len(domains)} domains:")
+    for domain, residues in domains.items():
+        print(f"  {domain}: {len(residues)} residues ({min(residues)}-{max(residues)})")
+    
+    # Analyze edges
+    intra_domain_mi = {}  # MI within each domain
+    inter_domain_mi = {}  # MI between domain pairs
+    
+    for domain in domains.keys():
+        intra_domain_mi[domain] = []
+    
+    print("\nAnalyzing graph edges...")
+    for edge in tqdm(Graph.edges(data=True), desc="Processing edges"):
+        node1, node2, edge_data = edge
+        
+        mi_value = edge_data.get('nmi', edge_data.get('mi', edge_data.get('weight', None)))
+        
+        if mi_value is None:
+            continue
+        
+        # Determine which domains these nodes belong to
+        domain1 = residue_to_domain(node1, Segmentation)
+        domain2 = residue_to_domain(node2, Segmentation)
+        
+        if domain1 is None or domain2 is None:
+            continue
+        
+        # Intra-domain edge
+        if domain1 == domain2:
+            intra_domain_mi[domain1].append(mi_value)
+        # Inter-domain edge
+        else:
+           
+            domain_pair = tuple(sorted([domain1, domain2]))
+            if domain_pair not in inter_domain_mi:
+                inter_domain_mi[domain_pair] = []
+            inter_domain_mi[domain_pair].append(mi_value)
+    
+    print("\n" + "="*60)
+    print("INTRA-DOMAIN MUTUAL INFORMATION")
+    print("="*60)
+    
+    for domain, mi_values in intra_domain_mi.items():
+        if mi_values:
+            total_mi = sum(mi_values)
+            avg_mi = total_mi / len(mi_values)
+            print(f"{domain}:")
+            print(f"  Total MI: {total_mi:.4f}")
+            print(f"  Average MI: {avg_mi:.6f}")
+            print(f"  Number of edges: {len(mi_values)}")
+        else:
+            print(f"{domain}: No edges found")
+    
+    print("\n" + "="*60)
+    print("INTER-DOMAIN MUTUAL INFORMATION")
+    print("="*60)
+    
+    for domain_pair, mi_values in inter_domain_mi.items():
+        if mi_values:
+            total_mi = sum(mi_values)
+            avg_mi = total_mi / len(mi_values)
+            print(f"{domain_pair[0]} <-> {domain_pair[1]}:")
+            print(f"  Total MI: {total_mi:.4f}")
+            print(f"  Average MI: {avg_mi:.6f}")
+            print(f"  Number of edges: {len(mi_values)}")
+    
+    summary_data = []
+    
+    # Add intra-domain data
+    for domain, mi_values in intra_domain_mi.items():
+        if mi_values:
+            summary_data.append({
+                'Type': 'Intra-domain',
+                'Domain1': domain,
+                'Domain2': domain,
+                'Total_MI': sum(mi_values),
+                'Average_MI': sum(mi_values) / len(mi_values),
+                'Num_Edges': len(mi_values)
+            })
+    
+    # Add inter-domain data
+    for domain_pair, mi_values in inter_domain_mi.items():
+        if mi_values:
+            summary_data.append({
+                'Type': 'Inter-domain',
+                'Domain1': domain_pair[0],
+                'Domain2': domain_pair[1],
+                'Total_MI': sum(mi_values),
+                'Average_MI': sum(mi_values) / len(mi_values),
+                'Num_Edges': len(mi_values)
+            })
+    
+    summary_df = pd.DataFrame(summary_data)
+    print("\n" + "="*60)
+    print("SUMMARY")
+    print("="*60)
+    print(summary_df.to_string(index=False))
+    
+    # Save results
+    summary_df.to_csv(args.output, index=False)
+    print(f"\n\033[1mResults saved to '{args.output}'\033[0m")
+    exit(0)
+
