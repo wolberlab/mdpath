@@ -10,7 +10,7 @@ description = "MD signal transduction calculation"
 dynamic = ["version"]
 readme = "README.md"
 authors = [
-    { name = "Marvin Taterra and Niklas Piet Doering", email = "niklas.piet.doering@fu-berlin.de" }
+    { name = "Niklas Piet Doering and Marvin Taterra", email = "niklas.piet.doering@fu-berlin.de" }
 ]
 license = { text = "MIT" }
 # See https://pypi.org/classifiers/
@@ -18,20 +18,32 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.10,<3.13"
 # Declare any run-time dependencies that should be installed with the package.
-#dependencies = [
-#    "importlib-resources;python_version<'3.10'",
-#]
+dependencies = [
+    "MDAnalysis>=2.7.0",
+    "pandas",
+    "scikit-learn",
+    "networkx",
+    "scipy",
+    "biopython",
+    "tqdm",
+    "seaborn",
+    "nglview",
+    "pillow",
+    "numpy-stl"
+]
 
 # Update the urls once the hosting is set up.
 #[project.urls]
-#"Source" = "https://github.com/<username>/mdpath/"
+#"Source" = "https://github.com/NDoering99/mdpath"
 #"Documentation" = "https://mdpath.readthedocs.io/"
 
 [project.optional-dependencies]
 test = [
   "pytest>=6.1.2",
+  "pytest-runner",
+  "pytest-mock>=3.14.0"
 ]
 
 [tool.setuptools]
@@ -54,9 +66,9 @@ zip-safe = false
 # (instead of using 'find'). With 'find', the 'tests' subpackage is discovered
 # recursively because of its __init__.py file, but the data subdirectory is excluded
 # with include-package-data = false and namespaces = false.
-include-package-data = false
+include-package-data = true
 [tool.setuptools.packages.find]
-namespaces = false
+namespaces = true
 where = ["."]
 
 # Ref https://setuptools.pypa.io/en/latest/userguide/datafiles.html#package-data
@@ -82,3 +94,13 @@ default-tag = "1.0.0"
 
 [tool.versioningit.write]
 file = "mdpath/_version.py"
+
+[project.scripts]
+mdpath = "mdpath.mdpath:main"
+mdpath_json_editor = "mdpath.mdpath_tools:edit_3D_visualization_json"
+mdpath_compare = "mdpath.mdpath_tools:path_comparison"
+mdpath_multitraj = "mdpath.mdpath_tools:multitraj_analysis"
+mdpath_gpcr_image = "mdpath.mdpath_tools:gpcr_2D_vis"
+mdpath_spline = "mdpath.mdpath_tools:spline"
+mdpath_domain_mi = "mdpath.mdpath_tools:domain_mi_analysis"
+

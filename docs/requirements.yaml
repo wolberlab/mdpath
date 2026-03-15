@@ -3,14 +3,36 @@ channels:
 
   - defaults
 dependencies:
-    # Base depends
+  # Base depends
   - python
   - pip
-  
+  - sphinx
+  - sphinx_design
+  - numpy
+  - pandas
+  - networkx
+  - tqdm
+  - biopython
+  - nglview
+  - pillow
+  - mdanalysis
+  - scipy
+  - matplotlib
+  - sklearn
+  - numpy-stl  # Add this line
 
-
-
-    # Pip-only installs
   - pip:
     - -e ../
+    - MDAnalysis>=2.7.0
+    - numpy
+    - pandas
+    - scikit-learn
+    - networkx
+    - scipy
+    - biopython
+    - tqdm
+    - seaborn
+    - nglview
+    - pillow
+    - numpy-stl  
 

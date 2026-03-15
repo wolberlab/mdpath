@@ -1,0 +1,14 @@
+# example how to draw lines between coords (not the right format here) 
+for view_index, view_list in enumerate(combined_view_list):
+    for i in range(len(view_list) - 1):
+        coord1 = view_list[i]
+        coord2 = view_list[i + 1]
+        shape_script = f"""
+        var shape = new NGL.Shape('custom_shape_{view_index}_{i}');
+        shape.addCylinder([{coord1[0]}, {coord1[1]}, {coord1[2]}], [{coord2[0]}, {coord2[1]}, {coord2[2]}], [1, 0, 0], 0.5);  // Radius 2.0 for thickness
+
+        var shapeComp = this.stage.addComponentFromObject(shape);
+        shapeComp.addRepresentation('buffer');
+        """
+
+        view._execute_js_code(shape_script)

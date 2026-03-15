@@ -12,3 +12,7 @@ comment:
   behavior: default
   flags: null
   paths: null
+  
+ignore:
+  - "mdpath/tests/*"
+  - "mdpath/vis_pymol.py"

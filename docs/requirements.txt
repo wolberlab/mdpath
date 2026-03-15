@@ -1,0 +1,13 @@
+mdpath
+MDAnalysis>=2.7.0
+numpy
+pandas
+scikit-learn
+networkx
+scipy
+biopython
+tqdm
+seaborn
+nglview
+pillow
+numpy-stl  
