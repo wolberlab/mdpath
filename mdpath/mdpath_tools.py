@@ -11,7 +11,6 @@ import numpy as np
 import MDAnalysis as mda
 import json
 from tqdm import tqdm
-import numpy as np
 from collections import defaultdict
 import pickle
 
@@ -520,7 +519,6 @@ def domain_mi_analysis():
         print("Both -graph and -config are required for domain MI analysis.")
         exit(1)
     
-    # change to joblib if needed in the future
     print(f"Loading graph from {args.graph}...")
     with open(args.graph, "rb") as pkl_file:
         Graph = pickle.load(pkl_file)
@@ -528,7 +526,6 @@ def domain_mi_analysis():
     print(f"Loading domain configuration from {args.config}...")
     Segmentation = pd.read_csv(args.config)
     
-    # Helper functions
     def parse_residue_range(residue_str):
         """Parse residue range string like '1-50' into tuple (1, 50)"""
         start, end = residue_str.split('-')
@@ -539,28 +536,22 @@ def domain_mi_analysis():
         start, end = parse_residue_range(domain_row['Residues'])
         return list(range(start, end + 1))
     
-    def residue_to_domain(residue, segmentation):
-        """Find which domain a residue belongs to"""
-        for idx, row in segmentation.iterrows():
-            start, end = parse_residue_range(row['Residues'])
-            if start <= residue <= end:
-                return row['Domain']
-        return None
-    
-    # Parse domains
+    #Build for O(n) lookup 
+    res_to_domain = {}
     domains = {}
-    for idx, row in Segmentation.iterrows():
+    for _, row in Segmentation.iterrows():
         domain_name = row['Domain']
         residues = get_residues_in_domain(row)
         domains[domain_name] = residues
+        for r in residues:
+            res_to_domain[r] = domain_name
     
     print(f"\nLoaded {len(domains)} domains:")
     for domain, residues in domains.items():
         print(f"  {domain}: {len(residues)} residues ({min(residues)}-{max(residues)})")
     
-    # Analyze edges
-    intra_domain_mi = {}  # MI within each domain
-    inter_domain_mi = {}  # MI between domain pairs
+    intra_domain_mi = {}
+    inter_domain_mi = {}
     
     for domain in domains.keys():
         intra_domain_mi[domain] = []
@@ -574,19 +565,15 @@ def domain_mi_analysis():
         if mi_value is None:
             continue
         
-        # Determine which domains these nodes belong to
-        domain1 = residue_to_domain(node1, Segmentation)
-        domain2 = residue_to_domain(node2, Segmentation)
+        domain1 = res_to_domain.get(node1)
+        domain2 = res_to_domain.get(node2)
         
         if domain1 is None or domain2 is None:
             continue
         
-        # Intra-domain edge
         if domain1 == domain2:
             intra_domain_mi[domain1].append(mi_value)
-        # Inter-domain edge
         else:
-           
             domain_pair = tuple(sorted([domain1, domain2]))
             if domain_pair not in inter_domain_mi:
                 inter_domain_mi[domain_pair] = []
@@ -622,7 +609,6 @@ def domain_mi_analysis():
     
     summary_data = []
     
-    # Add intra-domain data
     for domain, mi_values in intra_domain_mi.items():
         if mi_values:
             summary_data.append({
@@ -634,7 +620,6 @@ def domain_mi_analysis():
                 'Num_Edges': len(mi_values)
             })
     
-    # Add inter-domain data
     for domain_pair, mi_values in inter_domain_mi.items():
         if mi_values:
             summary_data.append({
@@ -652,8 +637,6 @@ def domain_mi_analysis():
     print("="*60)
     print(summary_df.to_string(index=False))
     
-    # Save results
     summary_df.to_csv(args.output, index=False)
     print(f"\n\033[1mResults saved to '{args.output}'\033[0m")
     exit(0)
-
