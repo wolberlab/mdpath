@@ -12,6 +12,7 @@ Classes
 
 import pandas as pd
 import numpy as np
+from collections import defaultdict
 from multiprocessing import Pool, Manager
 from tqdm import tqdm
 from scipy.cluster import hierarchy
@@ -39,6 +40,9 @@ class PatwayClustering:
         self.df = df_close_res
         self.close_pairs_set = set(zip(df_close_res['Residue1'], df_close_res['Residue2'])) | \
                       set(zip(df_close_res['Residue2'], df_close_res['Residue1']))
+        self.neighbors = defaultdict(set)
+        for r1, r2 in self.close_pairs_set:
+            self.neighbors[r1].add(r2)
         self.pathways = pathways
         self.num_processes = num_processes
         self.overlapp_df = self.calculate_overlap_parallel()
@@ -55,19 +59,17 @@ class PatwayClustering:
         i, path1 = args
         result = []
         for j in range(i + 1, len(self.pathways)):
-            if i != j:
-                path2 = self.pathways[j]
-                overlap_counter = 0
-                for res1 in path1:
-                    for res2 in path2:
-                        if (res1, res2) in self.close_pairs_set:
-                            overlap_counter += 1
-                result.append(
-                    {"Pathway1": i, "Pathway2": j, "Overlap": overlap_counter}
-                )
-                result.append(
-                    {"Pathway1": j, "Pathway2": i, "Overlap": overlap_counter}
-                )
+            path2 = self.pathways[j]
+            path2_set = set(path2)
+            overlap_counter = sum(
+                len(self.neighbors[res1] & path2_set) for res1 in path1
+            )
+            result.append(
+                {"Pathway1": i, "Pathway2": j, "Overlap": overlap_counter}
+            )
+            result.append(
+                {"Pathway1": j, "Pathway2": i, "Overlap": overlap_counter}
+            )
         return result
 
     def calculate_overlap_parallel(self) -> pd.DataFrame:
