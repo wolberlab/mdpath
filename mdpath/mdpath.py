@@ -22,7 +22,6 @@ import MDAnalysis as mda
 import json
 import multiprocessing
 from tqdm import tqdm
-import numpy as np
 from collections import defaultdict
 import pickle
 
@@ -32,7 +31,6 @@ from mdpath.src.graph import GraphBuilder
 from mdpath.src.cluster import PatwayClustering
 from mdpath.src.visualization import MDPathVisualize
 from mdpath.src.bootstrap import BootstrapAnalysis
-import os
 
 
 def main():
@@ -147,6 +145,14 @@ def main():
         default=False,
     )
 
+    parser.add_argument(
+        "-water",
+        dest="water",
+        help="Allows for the tracking of stable waters medigating allosteric communication. Only include if the trajectory includes the water model.",
+        required=False,
+        default=False,
+    )
+
     args = parser.parse_args()
     if not args.topology or not args.trajectory:
         print("Both trajectory and topology files are required!")
@@ -164,6 +170,7 @@ def main():
     numpath = int(args.numpath)
     invert = bool(args.invert)
     spline = bool(args.spline)
+    water = float(args.water)
 
     # Prepare the trajectory for analysis
     if os.path.exists("first_frame.pdb"):
@@ -196,8 +203,14 @@ def main():
         )
 
     structure_calc = StructureCalculations(topology)
-    df_distant_residues = structure_calc.calculate_residue_suroundings(fardist, "far")
-    df_close_res = structure_calc.calculate_residue_suroundings(closedist, "close")
+
+    # Single KDTree pass when fardist == closedist (the default)
+    if fardist == closedist:
+        df_close_res, df_distant_residues = structure_calc.calculate_close_and_far(fardist)
+    else:
+        df_distant_residues = structure_calc.calculate_residue_suroundings(fardist, "far")
+        df_close_res = structure_calc.calculate_residue_suroundings(closedist, "close")
+
     dihedral_calc = DihedralAngles(
         traj,
         structure_calc.first_res_num,
@@ -303,7 +316,20 @@ def main():
     if spline:
         MDPathVisualize.create_splines("quick_precomputed_clusters_paths.json")
 
+   # if water:
+   #     from mdpath.src.water_tracing import WaterTracer
+   #     water_tracer = WaterTracer(
+   #         topology=topology,
+   #         trajectory=trajectory,
+   #         path_total_weights=path_total_weights,
+   #         occurrence_threshold=float(water) / 100.0,
+   #     )
+   #     water_tracer.pathway_water_data.save("pathway_water_data.pkl")
+   #     water_tracer.pathway_water_data.to_dataframe().to_csv(
+   #         "pathway_water_bridges.csv", index=False
+   #     )
+
+
 
 if __name__ == "__main__":
     main()
-

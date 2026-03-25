@@ -14,6 +14,7 @@ Classes
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
+from itertools import combinations
 from sklearn.metrics import mutual_info_score
 from sklearn.mixture import GaussianMixture
 from scipy.stats import entropy
@@ -47,37 +48,34 @@ class NMICalculator:
 
     def NMI_calcs(self):
         """Extended Normalized Mutual Information and Entropy calculation."""
+        columns = self.df_all_residues.columns.tolist()
+
+        histograms = {}
         entropys = {}
+        for col in columns:
+            hist, _ = np.histogram(self.df_all_residues[col], bins=self.num_bins)
+            histograms[col] = hist
+            entropys[col] = entropy(hist)
+
         normalized_mutual_info = {}
-        total_iterations = len(self.df_all_residues.columns) ** 2
-        with tqdm(
-            total=total_iterations,
+        col_pairs = list(combinations(columns, 2))
+        for col1, col2 in tqdm(
+            col_pairs,
             desc="\033[1mCalculating Normalized Mutual Information\033[0m",
-        ) as progress_bar:
-            for col1 in self.df_all_residues.columns:
-                for col2 in self.df_all_residues.columns:
-                    if col1 != col2:
-                        hist_col1, _ = np.histogram(
-                            self.df_all_residues[col1], bins=self.num_bins
-                        )
-                        hist_col2, _ = np.histogram(
-                            self.df_all_residues[col2], bins=self.num_bins
-                        )
-                        hist_joint, _, _ = np.histogram2d(
-                            self.df_all_residues[col1],
-                            self.df_all_residues[col2],
-                            bins=self.num_bins,
-                        )
-                        mi = mutual_info_score(
-                            hist_col1, hist_col2, contingency=hist_joint
-                        )
-                        entropy_col1 = entropy(hist_col1)
-                        entropy_col2 = entropy(hist_col2)
-                        entropys[col1] = entropy_col1
-                        entropys[col2] = entropy_col2
-                        nmi = mi / np.sqrt(entropy_col1 * entropy_col2)
-                        normalized_mutual_info[(col1, col2)] = nmi
-                        progress_bar.update(1)
+        ):
+            hist_joint, _, _ = np.histogram2d(
+                self.df_all_residues[col1],
+                self.df_all_residues[col2],
+                bins=self.num_bins,
+            )
+            mi = mutual_info_score(
+                histograms[col1], histograms[col2], contingency=hist_joint
+            )
+            entropy_col1 = entropys[col1]
+            entropy_col2 = entropys[col2]
+            nmi = mi / np.sqrt(entropy_col1 * entropy_col2)
+            normalized_mutual_info[(col1, col2)] = nmi
+            normalized_mutual_info[(col2, col1)] = nmi
 
         entropy_df = pd.DataFrame(entropys.items(), columns=["Residue", "Entropy"])
         nmi_df = pd.DataFrame(

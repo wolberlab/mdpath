@@ -167,7 +167,7 @@ class MDPathVisualize:
                 if isinstance(item, np.ndarray):
                     transformed.append(item.tolist())
                 elif isinstance(item, list):
-                    transformed.append(transform_list(item))  # Append instead of extend
+                    transformed.append(transform_list(item))
                 else:
                     transformed.append(item)
             return transformed
@@ -465,7 +465,6 @@ class MDPathVisualize:
 
         draw.rectangle([x, 40, x + column_width, height - padding], outline="black")
 
-        # Draw circles and labels
         for i, (_, genetic_number) in enumerate(res):
             if align == "top":
                 circle_y = 80 + i * (circle_diameter + padding)
@@ -488,7 +487,6 @@ class MDPathVisualize:
                 outline="black",
             )
 
-            # Draw genetic number
             draw.text(
                 (circle_x - 28, circle_y - 8),
                 f"{genetic_number}",
@@ -527,7 +525,6 @@ class MDPathVisualize:
 
         for cluster in updated_cluster_residues.keys():
 
-            # Data preparation
             tm_data = {i: [] for i in range(1, 8)}
             icl_data = []
             ecl_data = []
@@ -544,7 +541,6 @@ class MDPathVisualize:
                         elif tm_number in [23, 45, 67]:
                             ecl_data.append((position, res))
 
-            # Remove duplicate values and sort
             for tm_number, values in tm_data.items():
                 tm_data[tm_number] = list(set(values))
             icl_data = list(set(icl_data))
@@ -558,7 +554,6 @@ class MDPathVisualize:
                 max(len(res) for res in tm_data.values()), len(icl_data), len(ecl_data)
             )
 
-            # Image size
             circle_diameter = 75
             padding = 40
             column_width = 100
@@ -568,7 +563,6 @@ class MDPathVisualize:
             image = Image.new("RGB", (width, height), color="white")
             draw = ImageDraw.Draw(image)
 
-            # Load a font
             if fontfile:
                 try:
                     font = ImageFont.truetype(fontfile, fontsize_numbers)
@@ -627,7 +621,6 @@ class MDPathVisualize:
                 title_font,
             )
 
-            # Count the frequency of each path and calculate cutoff
             connection_counts = Counter()
             for path in updated_cluster_residues[cluster]:
                 for i in range(len(path) - 1):
@@ -636,7 +629,6 @@ class MDPathVisualize:
             max_count = max(connection_counts.values()) if connection_counts else 1
             cutoff_count = (cutoff_percentage / 100) * max_count
 
-            # Draw lines between connected residues with varying thickness
             for path in updated_cluster_residues[cluster]:
                 for i in range(len(path) - 1):
                     current_res = path[i]
@@ -646,15 +638,12 @@ class MDPathVisualize:
                         start = circle_positions[current_res]
                         end = circle_positions[next_res]
 
-                        # Get the count for this connection
                         connection = tuple(sorted([current_res, next_res]))
                         count = connection_counts[connection]
 
-                        # Only draw the line if the count is above the cutoff
                         if count >= cutoff_count:
                             thickness = max(1, min(5, int((count / max_count) * 10)))
                             draw.line([start, end], fill="blue", width=thickness)
-            # Save the image
             image.save(f"{image_name}_cluster_{cluster}.png")
             print(f"Image saved as {image_name}_cluster_{cluster}.png")
 
@@ -672,6 +661,11 @@ class MDPathVisualize:
 
         def find_connected_paths(clusters):
             """Find continuous paths by connecting matching coordinates and their radii."""
+            coord_index = defaultdict(list)
+            for j, cluster in enumerate(clusters):
+                key = tuple(np.round(cluster["coord1"], 6))
+                coord_index[key].append(j)
+
             paths = []
             used_indices = set()
             for i, cluster in enumerate(clusters):
@@ -685,18 +679,17 @@ class MDPathVisualize:
 
                 last_coord = cluster["coord2"]
                 while True:
+                    key = tuple(np.round(last_coord, 6))
                     found_next = False
-                    for j, next_cluster in enumerate(clusters):
+                    for j in coord_index.get(key, []):
                         if j in used_indices:
                             continue
-
-                        if np.allclose(next_cluster["coord1"], last_coord):
-                            current_path.append(next_cluster["coord2"])
-                            current_radii.append(next_cluster["radius"])
-                            last_coord = next_cluster["coord2"]
-                            used_indices.add(j)
-                            found_next = True
-                            break
+                        current_path.append(clusters[j]["coord2"])
+                        current_radii.append(clusters[j]["radius"])
+                        last_coord = clusters[j]["coord2"]
+                        used_indices.add(j)
+                        found_next = True
+                        break
 
                     if not found_next:
                         break

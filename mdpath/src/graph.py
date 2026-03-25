@@ -11,10 +11,11 @@ Classes
 :class:`GraphBuilder`
 """
 
+import heapq
+import numpy as np
 import networkx as nx
 import pandas as pd
-from tqdm import tqdm
-from itertools import combinations
+from scipy.spatial import cKDTree
 from Bio import PDB
 from typing import Tuple, List
 from mdpath.src.structure import StructureCalculations
@@ -51,32 +52,35 @@ class GraphBuilder:
             residue_graph (nx.Graph): Graph of residues within a certain distance of each other.
         """
         residue_graph = nx.Graph()
-        structure_calc = StructureCalculations(self.pdb)
         parser = PDB.PDBParser(QUIET=True)
         structure = parser.get_structure("pdb_structure", self.pdb)
-        heavy_atoms = ["C", "N", "O", "S"]
+        heavy_atoms = {"C", "N", "O", "S"}
         residues = [
             res for res in structure.get_residues() if PDB.Polypeptide.is_aa(res)
         ]
-        for res1, res2 in tqdm(
-            combinations(residues, 2),
-            desc="\033[1mBuilding residue graph\033[0m",
-            total=len(residues) * (len(residues) - 1) // 2,
-        ):
-            res1_id = res1.get_id()[1]
-            res2_id = res2.get_id()[1]
-            if res1_id <= self.end and res2_id <= self.end:
-                for atom1 in res1:
-                    if atom1.element in heavy_atoms:
-                        for atom2 in res2:
-                            if atom2.element in heavy_atoms:
-                                distance = structure_calc.calculate_distance(
-                                    atom1.coord, atom2.coord
-                                )
-                                if distance <= self.dist:
-                                    residue_graph.add_edge(
-                                        res1.get_id()[1], res2.get_id()[1], weight=0
-                                    )
+
+        coords = []
+        res_ids = []
+        for res in residues:
+            rid = res.get_id()[1]
+            if rid <= self.end:
+                for atom in res:
+                    if atom.element in heavy_atoms:
+                        coords.append(atom.coord)
+                        res_ids.append(rid)
+
+        if not coords:
+            return residue_graph
+
+        coords = np.array(coords)
+        res_ids = np.array(res_ids)
+        tree = cKDTree(coords)
+        atom_pairs = tree.query_pairs(r=self.dist)
+
+        for i, j in atom_pairs:
+            if res_ids[i] != res_ids[j]:
+                residue_graph.add_edge(int(res_ids[i]), int(res_ids[j]), weight=0)
+
         return residue_graph
 
     def graph_assign_weights(self, residue_graph: nx.Graph) -> nx.Graph:
@@ -88,15 +92,16 @@ class GraphBuilder:
         Returns:
             residue_graph (nx.Graph): Residue graph with edge weights assigned.
         """
+        weight_lookup = {}
+        for _, row in self.mi_diff_df.iterrows():
+            pair = tuple(row["Residue Pair"])
+            weight_lookup[pair] = row["MI Difference"]
+
         for edge in residue_graph.edges():
             u, v = edge
             pair = ("Res " + str(u), "Res " + str(v))
-            if pair in self.mi_diff_df["Residue Pair"].apply(tuple).tolist():
-                weight = self.mi_diff_df.loc[
-                    self.mi_diff_df["Residue Pair"].apply(tuple) == pair,
-                    "MI Difference",
-                ].values[0]
-                residue_graph.edges[edge]["weight"] = weight
+            if pair in weight_lookup:
+                residue_graph.edges[edge]["weight"] = weight_lookup[pair]
         return residue_graph
 
     def graph_builder(self) -> nx.Graph:
@@ -122,22 +127,31 @@ class GraphBuilder:
 
             total_weight (float): Total weight of the shortest path.
         """
-        all_shortest_paths = list(
-            nx.all_shortest_paths(self.graph, source=source, target=target)
-        )
+        best = {source: (0, 0)}
+        heap = [(0, 0, source, [source])]
 
-        max_weight = -float("inf")
-        best_path = None
+        while heap:
+            dist, neg_w, u, path = heapq.heappop(heap)
+            acc_w = -neg_w
 
-        for path in all_shortest_paths:
-            path_weight = sum(
-                self.graph[path[i]][path[i + 1]]["weight"] for i in range(len(path) - 1)
-            )
-            if path_weight > max_weight:
-                max_weight = path_weight
-                best_path = path
+            if u == target:
+                return path, acc_w
 
-        return best_path, max_weight
+            prev_dist, prev_w = best.get(u, (float("inf"), -float("inf")))
+            if dist > prev_dist or (dist == prev_dist and acc_w < prev_w):
+                continue
+
+            for v in self.graph.neighbors(u):
+                edge_w = self.graph[u][v].get("weight", 0)
+                new_dist = dist + 1
+                new_w = acc_w + edge_w
+
+                prev_v = best.get(v, (float("inf"), -float("inf")))
+                if new_dist < prev_v[0] or (new_dist == prev_v[0] and new_w > prev_v[1]):
+                    best[v] = (new_dist, new_w)
+                    heapq.heappush(heap, (new_dist, -new_w, v, path + [v]))
+
+        raise nx.NetworkXNoPath(f"No path between {source} and {target}.")
 
     def collect_path_total_weights(self, df_distant_residues: pd.DataFrame) -> list:
         """Wrapper function to collect the shortest path and total weight between distant residues.
