@@ -165,6 +165,38 @@ def test_collect_path_total_weights():
                 assert result == case["expected_result"]
 
 
+def test_collect_path_total_weights_parallel():
+    with (
+        patch("mdpath.src.graph.StructureCalculations"),
+        patch("mdpath.src.graph.PDB.PDBParser"),
+    ):
+        G = nx.Graph()
+        G.add_edge(1, 2, weight=1.0)
+        G.add_edge(2, 3, weight=2.0)
+        G.add_edge(1, 3, weight=4.0)
+        G.add_edge(3, 4, weight=1.0)
+        G.add_edge(2, 4, weight=3.0)
+
+        graph_builder = GraphBuilder(
+            pdb="", last_residue=0, mi_diff_df=pd.DataFrame(), graphdist=5
+        )
+        graph_builder.graph = G
+
+        df = pd.DataFrame(
+            {"Residue1": [1, 2, 1], "Residue2": [4, 4, 99]}
+        )
+
+        serial_result = graph_builder.collect_path_total_weights(df)
+        parallel_result = graph_builder.collect_path_total_weights_parallel(
+            df, num_parallel_processes=2
+        )
+
+        normalize = lambda r: sorted(
+            (tuple(path), round(w, 9)) for path, w in r
+        )
+        assert normalize(parallel_result) == normalize(serial_result)
+
+
 def test_graph_skeleton():
     """Test the graph_skeleton method using actual data from mi_diff_df.csv and first_frame.pdb."""
 
