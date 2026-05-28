@@ -109,3 +109,84 @@ def test_calculate_dihedral_movement_parallel(mock_pool, mock_traj):
     df = angles.calculate_dihedral_movement_parallel(num_parallel_processes=1)
     assert isinstance(df, pd.DataFrame)
     assert not df.empty
+
+
+class TestCalculateDihedralMovementsMultiTraj:
+    """Tests for StructureCalculations.calculate_dihedral_movements_multi_traj."""
+
+    @patch("mdpath.src.structure.DihedralAngles")
+    @patch("mdpath.src.structure.mda.Universe")
+    def test_basic_concatenation(self, mock_universe, mock_dihedral_cls, pdb_file):
+        """Multiple trajectories produce a row-concatenated DataFrame."""
+        df1 = pd.DataFrame({"Res 1": [0.1, 0.2], "Res 2": [0.3, 0.4]})
+        df2 = pd.DataFrame({"Res 1": [0.5, 0.6, 0.7], "Res 2": [0.8, 0.9, 1.0]})
+
+        mock_instance = MagicMock()
+        mock_instance.calculate_dihedral_movement_parallel.side_effect = [df1, df2]
+        mock_dihedral_cls.return_value = mock_instance
+
+        calc = StructureCalculations(pdb_file)
+        result = calc.calculate_dihedral_movements_multi_traj(
+            ["traj1.dcd", "traj2.dcd"], str(pdb_file), 1
+        )
+
+        assert len(result) == 5  # 2 + 3 rows
+        assert list(result.columns) == ["Res 1", "Res 2"]
+        assert result.index.tolist() == [0, 1, 2, 3, 4]
+
+    @patch("mdpath.src.structure.DihedralAngles")
+    @patch("mdpath.src.structure.mda.Universe")
+    def test_column_intersection(self, mock_universe, mock_dihedral_cls, pdb_file):
+        """Residues missing in some replicas are dropped."""
+        df1 = pd.DataFrame({"Res 1": [0.1], "Res 2": [0.2], "Res 3": [0.3]})
+        df2 = pd.DataFrame({"Res 1": [0.4], "Res 3": [0.5]})  # Res 2 missing
+
+        mock_instance = MagicMock()
+        mock_instance.calculate_dihedral_movement_parallel.side_effect = [df1, df2]
+        mock_dihedral_cls.return_value = mock_instance
+
+        calc = StructureCalculations(pdb_file)
+        result = calc.calculate_dihedral_movements_multi_traj(
+            ["traj1.dcd", "traj2.dcd"], str(pdb_file), 1
+        )
+
+        assert "Res 2" not in result.columns
+        assert list(result.columns) == ["Res 1", "Res 3"]
+        assert len(result) == 2
+
+    @patch("mdpath.src.structure.DihedralAngles")
+    @patch("mdpath.src.structure.mda.Universe")
+    def test_single_trajectory(self, mock_universe, mock_dihedral_cls, pdb_file):
+        """Single trajectory returns its DataFrame unchanged."""
+        df1 = pd.DataFrame({"Res 1": [0.1, 0.2], "Res 2": [0.3, 0.4]})
+
+        mock_instance = MagicMock()
+        mock_instance.calculate_dihedral_movement_parallel.return_value = df1
+        mock_dihedral_cls.return_value = mock_instance
+
+        calc = StructureCalculations(pdb_file)
+        result = calc.calculate_dihedral_movements_multi_traj(
+            ["traj1.dcd"], str(pdb_file), 1
+        )
+
+        assert len(result) == 2
+        assert list(result.columns) == ["Res 1", "Res 2"]
+
+    @patch("mdpath.src.structure.DihedralAngles")
+    @patch("mdpath.src.structure.mda.Universe")
+    def test_empty_trajectory_skipped(self, mock_universe, mock_dihedral_cls, pdb_file):
+        """Empty DataFrames from failed trajectories are skipped."""
+        df1 = pd.DataFrame()
+        df2 = pd.DataFrame({"Res 1": [0.1, 0.2]})
+
+        mock_instance = MagicMock()
+        mock_instance.calculate_dihedral_movement_parallel.side_effect = [df1, df2]
+        mock_dihedral_cls.return_value = mock_instance
+
+        calc = StructureCalculations(pdb_file)
+        result = calc.calculate_dihedral_movements_multi_traj(
+            ["traj1.dcd", "traj2.dcd"], str(pdb_file), 1
+        )
+
+        assert len(result) == 2
+        assert list(result.columns) == ["Res 1"]

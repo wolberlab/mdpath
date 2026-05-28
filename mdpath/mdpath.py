@@ -1,7 +1,7 @@
 """MDPath --- MD signal transduction calculation and visualization --- :mod:`mdpath.mdapth`
 ====================================================================
 
-MDPath is a Python package for calculating signal transduction paths in molecular dynamics (MD) simulations. 
+MDPath is a Python package for calculating signal transduction paths in molecular dynamics (MD) simulations.
 The package uses mutual information to identify connections between residue movements.
 Using a graph shortest paths with the highest mutual information are calculated.
 Paths are then clustered based on the overlap between them to identify a continuous network throught the analysed protein.
@@ -17,7 +17,6 @@ Use the -h flag to see the available options.
 import os
 import argparse
 import pandas as pd
-import numpy as np
 import MDAnalysis as mda
 import json
 import multiprocessing
@@ -31,6 +30,7 @@ from mdpath.src.graph import GraphBuilder
 from mdpath.src.cluster import PatwayClustering
 from mdpath.src.visualization import MDPathVisualize
 from mdpath.src.bootstrap import BootstrapAnalysis
+from mdpath.src.confidence import EdgeConfidenceCalculator
 
 
 def main():
@@ -70,8 +70,9 @@ def main():
     parser.add_argument(
         "-traj",
         dest="trajectory",
-        help="Trajectory file of your MD simulation",
+        help="Trajectory file(s) of your MD simulation. Supports multiple replicas e.g. -traj traj1.dcd traj2.dcd",
         required=False,
+        nargs="+",
     )
     parser.add_argument(
         "-cpu",
@@ -138,9 +139,27 @@ def main():
     )
 
     parser.add_argument(
+        "-segid",
+        dest="segid",
+        help="Segment ID of the protein to be analyzed (e.g. PROA). For CHARMM topologies that use segid instead of chainID. CAUTION: only one segment can be selected for analysis.",
+        required=False,
+        default=False,
+    )
+
+    parser.add_argument(
         "-invert",
         dest="invert",
         help="Inverts NMI bei subtrackting each NMI from max NMI. Can be used to find Paths, that are the least correlated",
+        required=False,
+        default=False,
+    )
+
+    parser.add_argument(
+        "-confidence",
+        dest="confidence",
+        help="Compute per-edge confidence across replicas. Requires multiple -traj files. "
+        "Produces edge_confidence.csv (all graph edges) and top_paths_edge_confidence.csv "
+        "(consecutive transitions along the top pathways).",
         required=False,
         default=False,
     )
@@ -158,10 +177,14 @@ def main():
         print("Both trajectory and topology files are required!")
         exit()
 
+    if args.chain and args.segid:
+        print("Error: -chain and -segid are mutually exclusive. Please use only one.")
+        exit()
+
     num_parallel_processes = int(args.num_parallel_processes)
     topology = args.topology
-    trajectory = args.trajectory
-    traj = mda.Universe(topology, trajectory)
+    trajectories = args.trajectory  # list due to nargs="+"
+    traj = mda.Universe(topology, trajectories[0])
     lig_interaction = args.lig_interaction
     bootstrap = args.bootstrap
     fardist = float(args.fardist)
@@ -171,13 +194,13 @@ def main():
     invert = bool(args.invert)
     spline = bool(args.spline)
     water = float(args.water)
-
-    # Prepare the trajectory for analysis
-    if os.path.exists("first_frame.pdb"):
-        os.remove("first_frame.pdb")
-    with mda.Writer("first_frame.pdb", multiframe=False) as pdb:
-        traj.trajectory[0]
-        pdb.write(traj.atoms)
+    confidence = bool(args.confidence)
+    if confidence and len(trajectories) < 2:
+        print(
+            "Error: -confidence requires multiple replica trajectories "
+            "(-traj traj1 traj2 ...)."
+        )
+        exit()
 
     # Chain selection
     if args.chain:
@@ -185,41 +208,102 @@ def main():
         chain_atoms = traj.select_atoms(f"chainID {chain}")
         if len(chain_atoms) == 0:
             raise ValueError(f"No atoms found for chain {chain}")
-            exit()
         chain_universe = mda.Merge(chain_atoms)
         # Write new topology
         chain_universe.atoms.write("selected_chain.pdb")
 
-        # Write trajectory
-        with mda.Writer("selected_chain.dcd", chain_atoms.n_atoms) as W:
-            for ts in traj.trajectory:
-                chain_universe.atoms.positions = chain_atoms.positions
-                W.write(chain_universe.atoms)
+        # Write trajectory for each replica
+        new_trajectories = []
+        for i, traj_file in enumerate(trajectories):
+            u = mda.Universe(topology, traj_file)
+            chain_sel = u.select_atoms(f"chainID {chain}")
+            out_name = f"selected_chain_{i}.dcd"
+            with mda.Writer(out_name, chain_sel.n_atoms) as W:
+                for ts in u.trajectory:
+                    chain_universe.atoms.positions = chain_sel.positions
+                    W.write(chain_universe.atoms)
+            new_trajectories.append(out_name)
+
         topology = "selected_chain.pdb"
-        trajectory = "selected_chain.dcd"
-        traj = mda.Universe(topology, trajectory)
+        trajectories = new_trajectories
+        traj = mda.Universe(topology, trajectories[0])
         print(
-            f"Chain {chain} selected and written to selected_chain.pdb and selected_chain.dcd and will now be analyzed."
+            f"Chain {chain} selected for {len(trajectories)} trajectory file(s) and will now be analyzed."
         )
 
+    # Segment ID selection (CHARMM compatibility)
+    if args.segid:
+        segid = str(args.segid)
+        segid_atoms = traj.select_atoms(f"segid {segid}")
+        if len(segid_atoms) == 0:
+            raise ValueError(f"No atoms found for segid {segid}")
+        segid_universe = mda.Merge(segid_atoms)
+        segid_universe.atoms.write("selected_segid.pdb")
+
+        new_trajectories = []
+        for i, traj_file in enumerate(trajectories):
+            u = mda.Universe(topology, traj_file)
+            segid_sel = u.select_atoms(f"segid {segid}")
+            out_name = f"selected_segid_{i}.dcd"
+            with mda.Writer(out_name, segid_sel.n_atoms) as W:
+                for ts in u.trajectory:
+                    segid_universe.atoms.positions = segid_sel.positions
+                    W.write(segid_universe.atoms)
+            new_trajectories.append(out_name)
+
+        topology = "selected_segid.pdb"
+        trajectories = new_trajectories
+        traj = mda.Universe(topology, trajectories[0])
+        print(
+            f"Segment {segid} selected for {len(trajectories)} trajectory file(s) and will now be analyzed."
+        )
+
+    # Write first frame PDB after all selections
+    if os.path.exists("first_frame.pdb"):
+        os.remove("first_frame.pdb")
+    with mda.Writer("first_frame.pdb", multiframe=False) as pdb:
+        traj.trajectory[0]
+        pdb.write(traj.atoms)
+
+    topology = "first_frame.pdb"
     structure_calc = StructureCalculations(topology)
 
     # Single KDTree pass when fardist == closedist (the default)
     if fardist == closedist:
-        df_close_res, df_distant_residues = structure_calc.calculate_close_and_far(fardist)
+        df_close_res, df_distant_residues = structure_calc.calculate_close_and_far(
+            fardist
+        )
     else:
-        df_distant_residues = structure_calc.calculate_residue_suroundings(fardist, "far")
+        df_distant_residues = structure_calc.calculate_residue_suroundings(
+            fardist, "far"
+        )
         df_close_res = structure_calc.calculate_residue_suroundings(closedist, "close")
 
-    dihedral_calc = DihedralAngles(
-        traj,
-        structure_calc.first_res_num,
-        structure_calc.last_res_num,
-        structure_calc.last_res_num,
-    )
-    df_all_residues = dihedral_calc.calculate_dihedral_movement_parallel(
-        num_parallel_processes
-    )
+    per_replica_dfs = None
+    if len(trajectories) == 1:
+        dihedral_calc = DihedralAngles(
+            traj,
+            structure_calc.first_res_num,
+            structure_calc.last_res_num,
+            structure_calc.num_residues,
+        )
+        df_all_residues = dihedral_calc.calculate_dihedral_movement_parallel(
+            num_parallel_processes
+        )
+    else:
+        if confidence:
+            df_all_residues, per_replica_dfs = (
+                structure_calc.calculate_dihedral_movements_multi_traj(
+                    trajectories,
+                    topology,
+                    num_parallel_processes,
+                    return_per_replica=True,
+                )
+            )
+        else:
+            df_all_residues = structure_calc.calculate_dihedral_movements_multi_traj(
+                trajectories, topology, num_parallel_processes
+            )
     print("\033[1mTrajectory is processed and ready for analysis.\033[0m")
 
     # Calculate the mutual information and build the graph
@@ -229,17 +313,31 @@ def main():
     graph_builder = GraphBuilder(
         topology, structure_calc.last_res_num, nmi_calc.nmi_df, graphdist
     )
-    
+
     # Save the graph for future data science
     with open("graph.pkl", "wb") as pkl_file:
         pickle.dump(graph_builder.graph, pkl_file)
-        
+
+    # Per-edge confidence across replicas (multi-replica only, opt-in via -confidence)
+    edge_conf_calc = None
+    edge_conf_df = None
+    if confidence and per_replica_dfs is not None:
+        edge_conf_calc = EdgeConfidenceCalculator(per_replica_dfs)
+        edge_conf_df = edge_conf_calc.build_edge_confidence_df()
+        edge_conf_df_graph = EdgeConfidenceCalculator.filter_to_graph_edges(
+            edge_conf_df, graph_builder.graph
+        )
+        edge_conf_df_graph.to_csv("edge_confidence.csv", index=False)
+        print(
+            "\033[1mPer-edge confidence across replicas saved to edge_confidence.csv\033[0m"
+        )
+
     MDPathVisualize.visualise_graph(
         graph_builder.graph
     )  # Exports image of the Graph to PNG
 
     # Calculate paths
-    path_total_weights = graph_builder.collect_path_total_weights_parallel(df_distant_residues, num_parallel_processes)
+    path_total_weights = graph_builder.collect_path_total_weights(df_distant_residues)
     sorted_paths = sorted(path_total_weights, key=lambda x: x[1], reverse=True)
     with open("output.txt", "w") as file:
         for path, total_weight in sorted_paths[:numpath]:
@@ -259,6 +357,16 @@ def main():
         ]
         top_pathways = [path for path, _ in sorted_paths[:numpath]]
         print("\033[1mLigand pathways gathered..\033[0m")
+
+    # Per-edge confidence for consecutive transitions along the top paths
+    if confidence and edge_conf_df is not None:
+        top_paths_conf_df = EdgeConfidenceCalculator.build_top_paths_edge_confidence_df(
+            top_pathways, edge_conf_df
+        )
+        top_paths_conf_df.to_csv("top_paths_edge_confidence.csv", index=False)
+        print(
+            "\033[1mTop-path edge confidence saved to top_paths_edge_confidence.csv\033[0m"
+        )
 
     # Bootstrap analysis
     if bootstrap:
@@ -316,19 +424,19 @@ def main():
     if spline:
         MDPathVisualize.create_splines("quick_precomputed_clusters_paths.json")
 
-   # if water:
-   #     from mdpath.src.water_tracing import WaterTracer
-   #     water_tracer = WaterTracer(
-   #         topology=topology,
-   #         trajectory=trajectory,
-   #         path_total_weights=path_total_weights,
-   #         occurrence_threshold=float(water) / 100.0,
-   #     )
-   #     water_tracer.pathway_water_data.save("pathway_water_data.pkl")
-   #     water_tracer.pathway_water_data.to_dataframe().to_csv(
-   #         "pathway_water_bridges.csv", index=False
-   #     )
 
+# if water:
+#     from mdpath.src.water_tracing import WaterTracer
+#     water_tracer = WaterTracer(
+#         topology=topology,
+#         trajectory=trajectory,
+#         path_total_weights=path_total_weights,
+#         occurrence_threshold=float(water) / 100.0,
+#     )
+#     water_tracer.pathway_water_data.save("pathway_water_data.pkl")
+#     water_tracer.pathway_water_data.to_dataframe().to_csv(
+#         "pathway_water_bridges.csv", index=False
+#     )
 
 
 if __name__ == "__main__":
