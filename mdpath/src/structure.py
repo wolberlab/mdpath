@@ -173,9 +173,80 @@ class StructureCalculations:
         )
         far_res_pairs = all_res_pairs - close_res_pairs
 
-        df_close = pd.DataFrame(sorted(close_res_pairs), columns=["Residue1", "Residue2"])
+        df_close = pd.DataFrame(
+            sorted(close_res_pairs), columns=["Residue1", "Residue2"]
+        )
         df_far = pd.DataFrame(sorted(far_res_pairs), columns=["Residue1", "Residue2"])
         return df_close, df_far
+
+    def calculate_dihedral_movements_multi_traj(
+        self,
+        traj_files: list,
+        topology: str,
+        num_parallel_processes: int,
+        return_per_replica: bool = False,
+    ):
+        """Process multiple independent trajectories and pool dihedral movement results.
+
+        Each trajectory is processed independently to avoid artificial jumps
+        at trajectory boundaries when computing dihedral angle differences.
+
+        Args:
+            traj_files (list): List of trajectory file paths.
+            topology (str): Path to the topology file.
+            num_parallel_processes (int): Number of parallel processes for dihedral calculation.
+            return_per_replica (bool, optional): If True, also return the list of per-replica
+                DataFrames aligned to the common residue columns. Default False preserves the
+                original single-return behavior.
+
+        Returns:
+            pd.DataFrame: Concatenated DataFrame of dihedral angle movements from all trajectories.
+            If ``return_per_replica`` is True, returns a tuple ``(concatenated_df, per_replica_dfs)``
+            where ``per_replica_dfs`` is a list of DataFrames (one per replica) restricted to the
+            same common columns as the concatenated output.
+        """
+        all_dfs = []
+        for i, traj_file in enumerate(traj_files):
+            print(
+                f"\033[1mProcessing trajectory {i + 1}/{len(traj_files)}: {traj_file}\033[0m"
+            )
+            traj = mda.Universe(topology, traj_file)
+            dihedral_calc = DihedralAngles(
+                traj, self.first_res_num, self.last_res_num, self.num_residues
+            )
+            df = dihedral_calc.calculate_dihedral_movement_parallel(
+                num_parallel_processes
+            )
+            if not df.empty:
+                all_dfs.append(df)
+
+        if not all_dfs:
+            empty = pd.DataFrame()
+            if return_per_replica:
+                return empty, []
+            return empty
+
+        # Only keep residues present in ALL replicas
+        common_cols = set(all_dfs[0].columns)
+        for df in all_dfs[1:]:
+            common_cols &= set(df.columns)
+        common_cols = sorted(common_cols)
+
+        dropped = set(all_dfs[0].columns)
+        for df in all_dfs:
+            dropped |= set(df.columns)
+        n_dropped = len(dropped) - len(common_cols)
+        if n_dropped > 0:
+            print(
+                f"\033[1mWarning: {n_dropped} residue(s) dropped due to inconsistent "
+                f"dihedral data across replicas.\033[0m"
+            )
+
+        all_dfs = [df[common_cols] for df in all_dfs]
+        concatenated = pd.concat(all_dfs, axis=0, ignore_index=True)
+        if return_per_replica:
+            return concatenated, all_dfs
+        return concatenated
 
 
 class DihedralAngles:
@@ -214,7 +285,7 @@ class DihedralAngles:
             tuple[int, np.ndarray] | None: Tuple of (residue_id, dihedral_angles) if successful, None if failed.
         """
         try:
-            res = self.traj.residues[res_id]
+            res = self.traj.residues[res_id - self.first_res_num]
             ags = [res.phi_selection()]
             if not all(ags):
                 return None
