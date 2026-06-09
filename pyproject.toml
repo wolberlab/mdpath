@@ -103,4 +103,5 @@ mdpath_multitraj = "mdpath.mdpath_tools:multitraj_analysis"
 mdpath_gpcr_image = "mdpath.mdpath_tools:gpcr_2D_vis"
 mdpath_spline = "mdpath.mdpath_tools:spline"
 mdpath_domain_mi = "mdpath.mdpath_tools:domain_mi_analysis"
+mdpath_confidence_spline = "mdpath.mdpath_tools:confidence_spline"
 
