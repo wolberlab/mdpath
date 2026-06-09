@@ -31,6 +31,7 @@ from mdpath.src.cluster import PatwayClustering
 from mdpath.src.visualization import MDPathVisualize
 from mdpath.src.bootstrap import BootstrapAnalysis
 from mdpath.src.confidence import EdgeConfidenceCalculator
+from mdpath.src.path_confidence_viz import ConfidencePathVisualizer
 
 
 def main():
@@ -158,8 +159,9 @@ def main():
         "-confidence",
         dest="confidence",
         help="Compute per-edge confidence across replicas. Requires multiple -traj files. "
-        "Produces edge_confidence.csv (all graph edges) and top_paths_edge_confidence.csv "
-        "(consecutive transitions along the top pathways).",
+        "Produces edge_confidence.csv (all graph edges), top_paths_edge_confidence.csv "
+        "(consecutive transitions along the top pathways), and confidence_paths_chimerax.py "
+        "(a self-contained ChimeraX viewer of the top paths colored by confidence).",
         required=False,
         default=False,
     )
@@ -404,6 +406,26 @@ def main():
 
     with open("top_pathways.pkl", "wb") as pkl_file:
         pickle.dump(top_pathways, pkl_file)
+
+    # Self-contained ChimeraX viewer of the top paths colored by replica
+    # confidence (auto-scaled tube thickness, hover shows the value).
+    if confidence and edge_conf_df is not None:
+        try:
+            conf_vis = ConfidencePathVisualizer.write_chimerax_script(
+                top_pathways,
+                residue_coordinates_dict,
+                edge_conf_df,
+                pdb_file="first_frame.pdb",
+                out_path="confidence_paths_chimerax.py",
+            )
+            print(
+                "\033[1mChimeraX confidence viewer saved to confidence_paths_chimerax.py "
+                "({0} paths, tube radius {1:.2f}-{2:.2f} A). Drag it onto a ChimeraX window.\033[0m".format(
+                    conf_vis["paths"], conf_vis["radius_min"], conf_vis["radius_max"]
+                )
+            )
+        except Exception as exc:
+            print(f"Could not generate ChimeraX confidence viewer: {exc}")
 
     # Export the cluster pathways for visualization
     updated_dict = MDPathVisualize.apply_backtracking(
