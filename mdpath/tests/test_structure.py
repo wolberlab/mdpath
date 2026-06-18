@@ -41,13 +41,6 @@ def test_res_num_from_pdb(pdb_file):
     assert last_res == 303
 
 
-def test_calculate_distance(pdb_file):
-    calc = StructureCalculations(pdb_file)
-    # Test valid distance calculation
-    distance = calc.calculate_distance((1.0, 1.0, 1.0), (4.0, 5.0, 6.0))
-    assert np.isclose(distance, 7.071)  # Example assertion with expected distance
-
-
 def test_calculate_residue_surroundings(pdb_file):
     calc = StructureCalculations(pdb_file)
     df = calc.calculate_residue_suroundings(dist=2.0, mode="close")

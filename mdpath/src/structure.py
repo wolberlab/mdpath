@@ -62,23 +62,6 @@ class StructureCalculations:
                     last_res_num = res_num
         return int(first_res_num), int(last_res_num)
 
-    def calculate_distance(self, atom1: tuple, atom2: tuple) -> float:
-        """Calculates the distance between two atoms.
-
-        Args:
-            atom1 (tuple): Coordinates of the first atom.
-
-            atom2 (tuple): Coordinates of the second atom.
-
-        Returns:
-            distance (float): Normalized distance between the two atoms.
-        """
-        distance_vector = [
-            atom1[i] - atom2[i] for i in range(min(len(atom1), len(atom2)))
-        ]
-        distance = np.linalg.norm(distance_vector)
-        return distance
-
     def _build_kdtree(self, dist: float):
         """Builds a KDTree from heavy atoms and returns close residue pairs.
 

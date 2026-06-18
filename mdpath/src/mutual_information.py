@@ -16,9 +16,7 @@ import numpy as np
 from tqdm import tqdm
 from itertools import combinations
 from sklearn.metrics import mutual_info_score
-from sklearn.mixture import GaussianMixture
 from scipy.stats import entropy
-from scipy.special import digamma
 
 
 class NMICalculator:

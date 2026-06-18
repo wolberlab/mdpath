@@ -7,8 +7,6 @@ All functions can be called from the command line after installation of the pack
 import os
 import argparse
 import pandas as pd
-import numpy as np
-import MDAnalysis as mda
 import json
 from tqdm import tqdm
 from collections import defaultdict
@@ -484,10 +482,6 @@ def domain_mi_analysis():
         
         $ mdpath_domain_mi -graph <path_to_graph.pkl> -config <path_to_config.csv> -output <output_path>
     """
-    import pickle
-    import networkx as nx
-    import pandas as pd
-    
     parser = argparse.ArgumentParser(
         prog="mdpath_domain_mi",
         description="Analyze mutual information within and between protein domains.",
@@ -550,93 +544,32 @@ def domain_mi_analysis():
     for domain, residues in domains.items():
         print(f"  {domain}: {len(residues)} residues ({min(residues)}-{max(residues)})")
     
-    intra_domain_mi = {}
-    inter_domain_mi = {}
-    
-    for domain in domains.keys():
-        intra_domain_mi[domain] = []
-    
     print("\nAnalyzing graph edges...")
-    for edge in tqdm(Graph.edges(data=True), desc="Processing edges"):
-        node1, node2, edge_data = edge
-        
-        mi_value = edge_data.get('nmi', edge_data.get('mi', edge_data.get('weight', None)))
-        
-        if mi_value is None:
-            continue
-        
+    records = []
+    for node1, node2, edge_data in tqdm(Graph.edges(data=True), desc="Processing edges"):
+        mi_value = edge_data.get("nmi", edge_data.get("mi", edge_data.get("weight")))
         domain1 = res_to_domain.get(node1)
         domain2 = res_to_domain.get(node2)
-        
-        if domain1 is None or domain2 is None:
+        if mi_value is None or domain1 is None or domain2 is None:
             continue
-        
         if domain1 == domain2:
-            intra_domain_mi[domain1].append(mi_value)
+            records.append(("Intra-domain", domain1, domain1, mi_value))
         else:
-            domain_pair = tuple(sorted([domain1, domain2]))
-            if domain_pair not in inter_domain_mi:
-                inter_domain_mi[domain_pair] = []
-            inter_domain_mi[domain_pair].append(mi_value)
-    
-    print("\n" + "="*60)
-    print("INTRA-DOMAIN MUTUAL INFORMATION")
-    print("="*60)
-    
-    for domain, mi_values in intra_domain_mi.items():
-        if mi_values:
-            total_mi = sum(mi_values)
-            avg_mi = total_mi / len(mi_values)
-            print(f"{domain}:")
-            print(f"  Total MI: {total_mi:.4f}")
-            print(f"  Average MI: {avg_mi:.6f}")
-            print(f"  Number of edges: {len(mi_values)}")
-        else:
-            print(f"{domain}: No edges found")
-    
-    print("\n" + "="*60)
-    print("INTER-DOMAIN MUTUAL INFORMATION")
-    print("="*60)
-    
-    for domain_pair, mi_values in inter_domain_mi.items():
-        if mi_values:
-            total_mi = sum(mi_values)
-            avg_mi = total_mi / len(mi_values)
-            print(f"{domain_pair[0]} <-> {domain_pair[1]}:")
-            print(f"  Total MI: {total_mi:.4f}")
-            print(f"  Average MI: {avg_mi:.6f}")
-            print(f"  Number of edges: {len(mi_values)}")
-    
-    summary_data = []
-    
-    for domain, mi_values in intra_domain_mi.items():
-        if mi_values:
-            summary_data.append({
-                'Type': 'Intra-domain',
-                'Domain1': domain,
-                'Domain2': domain,
-                'Total_MI': sum(mi_values),
-                'Average_MI': sum(mi_values) / len(mi_values),
-                'Num_Edges': len(mi_values)
-            })
-    
-    for domain_pair, mi_values in inter_domain_mi.items():
-        if mi_values:
-            summary_data.append({
-                'Type': 'Inter-domain',
-                'Domain1': domain_pair[0],
-                'Domain2': domain_pair[1],
-                'Total_MI': sum(mi_values),
-                'Average_MI': sum(mi_values) / len(mi_values),
-                'Num_Edges': len(mi_values)
-            })
-    
-    summary_df = pd.DataFrame(summary_data)
-    print("\n" + "="*60)
+            d1, d2 = sorted([domain1, domain2])
+            records.append(("Inter-domain", d1, d2, mi_value))
+
+    edges_df = pd.DataFrame(records, columns=["Type", "Domain1", "Domain2", "MI"])
+    summary_df = (
+        edges_df.groupby(["Type", "Domain1", "Domain2"])["MI"]
+        .agg(Total_MI="sum", Average_MI="mean", Num_Edges="count")
+        .reset_index()
+    )
+
+    print("\n" + "=" * 60)
     print("SUMMARY")
-    print("="*60)
+    print("=" * 60)
     print(summary_df.to_string(index=False))
-    
+
     summary_df.to_csv(args.output, index=False)
     print(f"\n\033[1mResults saved to '{args.output}'\033[0m")
     exit(0)

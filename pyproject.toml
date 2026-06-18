@@ -28,7 +28,6 @@ dependencies = [
     "scipy",
     "biopython",
     "tqdm",
-    "seaborn",
     "nglview",
     "pillow",
     "numpy-stl"

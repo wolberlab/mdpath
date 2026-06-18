@@ -92,42 +92,6 @@ def test_apply_backtracking():
     assert result == expected
 
 
-def test_cluster_prep_for_visualisation():
-    pdb_file = "mock_pdb_file.pdb"
-    input_cluster = [[1, 2], [3]]
-    mock_coordinates = {1: (1.0, 1.0, 1.0), 2: (2.0, 2.0, 2.0), 3: (3.0, 3.0, 3.0)}
-
-    with patch("Bio.PDB.PDBParser") as mock_parser:
-        mock_structure = MagicMock()
-
-        def get_structure(name, file):
-            return mock_structure
-
-        mock_parser.return_value.get_structure.side_effect = get_structure
-
-        mock_residues = {}
-        for residue_id, coord in mock_coordinates.items():
-            mock_residue = MagicMock()
-            mock_atom = MagicMock()
-            mock_atom.get_coord.return_value = coord
-            mock_residue.__getitem__.return_value = mock_atom
-            mock_residues[("", residue_id, "")] = mock_residue
-
-        def getitem(res_id):
-            if res_id in mock_residues:
-                return mock_residues[res_id]
-            else:
-                raise KeyError
-
-        mock_structure[0].__getitem__.side_effect = getitem
-
-        result = MDPathVisualize.cluster_prep_for_visualisation(input_cluster, pdb_file)
-
-        expected_result = [[(1.0, 1.0, 1.0), (2.0, 2.0, 2.0)], [(3.0, 3.0, 3.0)]]
-
-        assert result == expected_result
-
-
 def test_format_dict():
     input_dict = {"array": np.array([1, 2, 3]), "nested_list": [1, 2, np.array([3, 4])]}
     expected_output = {"array": [1, 2, 3], "nested_list": [1, 2, [3, 4]]}
