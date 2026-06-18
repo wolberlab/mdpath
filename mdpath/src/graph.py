@@ -17,7 +17,7 @@ import networkx as nx
 import pandas as pd
 from scipy.spatial import cKDTree
 from Bio import PDB
-from typing import Tuple, List
+from typing import Tuple
 from multiprocessing import Pool
 from tqdm import tqdm
 from mdpath.src.structure import StructureCalculations

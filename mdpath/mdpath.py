@@ -16,12 +16,8 @@ Use the -h flag to see the available options.
 
 import os
 import argparse
-import pandas as pd
 import MDAnalysis as mda
 import json
-import multiprocessing
-from tqdm import tqdm
-from collections import defaultdict
 import pickle
 
 from mdpath.src.structure import StructureCalculations, DihedralAngles
@@ -31,6 +27,39 @@ from mdpath.src.cluster import PatwayClustering
 from mdpath.src.visualization import MDPathVisualize
 from mdpath.src.bootstrap import BootstrapAnalysis
 from mdpath.src.confidence import EdgeConfidenceCalculator
+
+
+def _select_subsystem(topology, trajectories, selection, prefix, label):
+    """Restrict topology and every replica trajectory to an atom selection.
+
+    Writes ``selected_<prefix>.pdb`` and ``selected_<prefix>_<i>.dcd`` per replica.
+
+    Returns:
+        tuple: (new_topology, new_trajectories, universe) for the selected subsystem.
+    """
+    universe = mda.Universe(topology, trajectories[0])
+    atoms = universe.select_atoms(selection)
+    if len(atoms) == 0:
+        raise ValueError(f"No atoms found for {selection}")
+    merged = mda.Merge(atoms)
+    out_topology = f"selected_{prefix}.pdb"
+    merged.atoms.write(out_topology)
+
+    new_trajectories = []
+    for i, traj_file in enumerate(trajectories):
+        u = mda.Universe(topology, traj_file)
+        sel = u.select_atoms(selection)
+        out_name = f"selected_{prefix}_{i}.dcd"
+        with mda.Writer(out_name, sel.n_atoms) as W:
+            for ts in u.trajectory:
+                merged.atoms.positions = sel.positions
+                W.write(merged.atoms)
+        new_trajectories.append(out_name)
+
+    print(
+        f"{label} selected for {len(new_trajectories)} trajectory file(s) and will now be analyzed."
+    )
+    return out_topology, new_trajectories, mda.Universe(out_topology, new_trajectories[0])
 
 
 def main():
@@ -164,14 +193,6 @@ def main():
         default=False,
     )
 
-    parser.add_argument(
-        "-water",
-        dest="water",
-        help="Allows for the tracking of stable waters medigating allosteric communication. Only include if the trajectory includes the water model.",
-        required=False,
-        default=False,
-    )
-
     args = parser.parse_args()
     if not args.topology or not args.trajectory:
         print("Both trajectory and topology files are required!")
@@ -193,7 +214,6 @@ def main():
     numpath = int(args.numpath)
     invert = bool(args.invert)
     spline = bool(args.spline)
-    water = float(args.water)
     confidence = bool(args.confidence)
     if confidence and len(trajectories) < 2:
         print(
@@ -205,57 +225,15 @@ def main():
     # Chain selection
     if args.chain:
         chain = str(args.chain)
-        chain_atoms = traj.select_atoms(f"chainID {chain}")
-        if len(chain_atoms) == 0:
-            raise ValueError(f"No atoms found for chain {chain}")
-        chain_universe = mda.Merge(chain_atoms)
-        # Write new topology
-        chain_universe.atoms.write("selected_chain.pdb")
-
-        # Write trajectory for each replica
-        new_trajectories = []
-        for i, traj_file in enumerate(trajectories):
-            u = mda.Universe(topology, traj_file)
-            chain_sel = u.select_atoms(f"chainID {chain}")
-            out_name = f"selected_chain_{i}.dcd"
-            with mda.Writer(out_name, chain_sel.n_atoms) as W:
-                for ts in u.trajectory:
-                    chain_universe.atoms.positions = chain_sel.positions
-                    W.write(chain_universe.atoms)
-            new_trajectories.append(out_name)
-
-        topology = "selected_chain.pdb"
-        trajectories = new_trajectories
-        traj = mda.Universe(topology, trajectories[0])
-        print(
-            f"Chain {chain} selected for {len(trajectories)} trajectory file(s) and will now be analyzed."
+        topology, trajectories, traj = _select_subsystem(
+            topology, trajectories, f"chainID {chain}", "chain", f"Chain {chain}"
         )
 
     # Segment ID selection (CHARMM compatibility)
     if args.segid:
         segid = str(args.segid)
-        segid_atoms = traj.select_atoms(f"segid {segid}")
-        if len(segid_atoms) == 0:
-            raise ValueError(f"No atoms found for segid {segid}")
-        segid_universe = mda.Merge(segid_atoms)
-        segid_universe.atoms.write("selected_segid.pdb")
-
-        new_trajectories = []
-        for i, traj_file in enumerate(trajectories):
-            u = mda.Universe(topology, traj_file)
-            segid_sel = u.select_atoms(f"segid {segid}")
-            out_name = f"selected_segid_{i}.dcd"
-            with mda.Writer(out_name, segid_sel.n_atoms) as W:
-                for ts in u.trajectory:
-                    segid_universe.atoms.positions = segid_sel.positions
-                    W.write(segid_universe.atoms)
-            new_trajectories.append(out_name)
-
-        topology = "selected_segid.pdb"
-        trajectories = new_trajectories
-        traj = mda.Universe(topology, trajectories[0])
-        print(
-            f"Segment {segid} selected for {len(trajectories)} trajectory file(s) and will now be analyzed."
+        topology, trajectories, traj = _select_subsystem(
+            topology, trajectories, f"segid {segid}", "segid", f"Segment {segid}"
         )
 
     # Write first frame PDB after all selections
@@ -337,7 +315,9 @@ def main():
     )  # Exports image of the Graph to PNG
 
     # Calculate paths
-    path_total_weights = graph_builder.collect_path_total_weights(df_distant_residues)
+    path_total_weights = graph_builder.collect_path_total_weights_parallel(
+        df_distant_residues, num_parallel_processes
+    )
     sorted_paths = sorted(path_total_weights, key=lambda x: x[1], reverse=True)
     with open("output.txt", "w") as file:
         for path, total_weight in sorted_paths[:numpath]:
@@ -423,20 +403,6 @@ def main():
 
     if spline:
         MDPathVisualize.create_splines("quick_precomputed_clusters_paths.json")
-
-
-# if water:
-#     from mdpath.src.water_tracing import WaterTracer
-#     water_tracer = WaterTracer(
-#         topology=topology,
-#         trajectory=trajectory,
-#         path_total_weights=path_total_weights,
-#         occurrence_threshold=float(water) / 100.0,
-#     )
-#     water_tracer.pathway_water_data.save("pathway_water_data.pkl")
-#     water_tracer.pathway_water_data.to_dataframe().to_csv(
-#         "pathway_water_bridges.csv", index=False
-#     )
 
 
 if __name__ == "__main__":

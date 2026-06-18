@@ -18,7 +18,6 @@ from tqdm import tqdm
 from scipy.cluster import hierarchy
 from sklearn.metrics import silhouette_score
 import matplotlib.pyplot as plt
-import seaborn as sns
 
 
 class PatwayClustering:

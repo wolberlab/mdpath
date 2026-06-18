@@ -14,7 +14,7 @@ import pandas as pd
 import numpy as np
 from mdpath.src.graph import GraphBuilder
 from mdpath.src.mutual_information import NMICalculator
-from typing import Dict, Set, Tuple, List
+from typing import Tuple
 import os
 
 
@@ -179,15 +179,7 @@ class BootstrapAnalysis:
         Returns:
             None write the path confidence intervals to a file.
         """
-        for path, (mean, lower, upper) in self.path_confidence_intervals.items():
-            path_str = " -> ".join(map(str, path))
-            with open(file_name, "w") as file:
-                for path, (
-                    mean,
-                    lower,
-                    upper,
-                ) in self.path_confidence_intervals.items():
-                    path_str = " -> ".join(map(str, path))
-                    file.write(
-                        f"{path_str}: Mean={mean}, 2.5%={lower}, 97.5%={upper}\n"
-                    )
+        with open(file_name, "w") as file:
+            for path, (mean, lower, upper) in self.path_confidence_intervals.items():
+                path_str = " -> ".join(map(str, path))
+                file.write(f"{path_str}: Mean={mean}, 2.5%={lower}, 97.5%={upper}\n")

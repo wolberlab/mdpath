@@ -66,9 +66,6 @@ class MDPathVisualize:
     Attributes:
         None (only static methods)"""
 
-    def __init__(self) -> None:
-        pass
-
     @staticmethod
     def residue_CA_coordinates(pdb_file: str, end: int) -> dict:
         """Collects CA atom coordinates for residues.
@@ -96,37 +93,6 @@ class MDPathVisualize:
                             residue_coordinates_dict[res_id] = []
                         residue_coordinates_dict[res_id].append(atom.coord)
         return residue_coordinates_dict
-
-    @staticmethod
-    def cluster_prep_for_visualisation(cluster: list, pdb_file: str) -> list:
-        """Prepares pathway clusters for visualisation.
-
-        Args:
-            cluster (list): Cluster of pathways.
-
-            pdb_file (str): Path to PDB file.
-
-        Returns:
-            cluster (list): Cluster of pathways with CA atom coordinates.
-        """
-        new_cluster = []
-        parser = PDB.PDBParser(QUIET=True)
-        structure = parser.get_structure("pdb_structure", pdb_file)
-
-        for pathway in cluster:
-            pathways = []
-            for residue in pathway:
-                res_id = ("", residue, "")
-                try:
-                    res = structure[0][res_id]
-                    atom = res["CA"]
-                    coord = tuple(atom.get_coord())
-                    pathways.append(coord)
-                except KeyError:
-                    print(f"Residue {res_id} not found.")
-            new_cluster.append(pathways)
-
-        return new_cluster
 
     @staticmethod
     def apply_backtracking(original_dict: dict, translation_dict: dict) -> dict:
@@ -204,18 +170,22 @@ class MDPathVisualize:
         plt.savefig("graph.png", dpi=300, bbox_inches="tight")
 
     @staticmethod
-    def precompute_path_properties(json_data: dict) -> list:
-        """Precomputes path properties for quicker visualization in Jupyter notebook.
+    def _precompute_properties(json_data: dict, detailed: bool) -> list:
+        """Walks cluster pathways and emits one record per valid coordinate segment.
 
         Args:
             json_data (dict): Cluster data with pathways and CA atom coordinates.
 
+            detailed (bool): If True, include pathway_index, path_segment_index and
+                path_number (used by :meth:`precompute_path_properties`). If False,
+                emit only clusterid/coords/color/radius.
+
         Returns:
-            path_properties (list): List of path properties. Contains clusterid, pathway index, path segment index, coordinates, color, radius, and path number.
+            list: Per-segment property dictionaries.
         """
         cluster_colors = {}
         color_index = 0
-        path_properties = []
+        properties = []
 
         for clusterid, cluster in json_data.items():
             cluster_colors[clusterid] = Colors[color_index % len(Colors)]
@@ -234,31 +204,41 @@ class MDPathVisualize:
                         and len(coord2) == 3
                     ):
                         coord_pair = (tuple(coord1), tuple(coord2))
-                        if coord_pair not in coord_pair_counts:
-                            coord_pair_counts[coord_pair] = 0
-                        coord_pair_counts[coord_pair] += 1
-                        radius = 0.015 + 0.015 * (coord_pair_counts[coord_pair] - 1)
-                        color = cluster_colors[clusterid]
-
-                        path_properties.append(
-                            {
-                                "clusterid": clusterid,
-                                "pathway_index": pathway_index,
-                                "path_segment_index": i,
-                                "coord1": coord1,
-                                "coord2": coord2,
-                                "color": color,
-                                "radius": radius,
-                                "path_number": path_number,
-                            }
+                        coord_pair_counts[coord_pair] = (
+                            coord_pair_counts.get(coord_pair, 0) + 1
                         )
+                        radius = 0.015 + 0.015 * (coord_pair_counts[coord_pair] - 1)
 
-                        path_number += 1
+                        entry = {
+                            "clusterid": clusterid,
+                            "coord1": coord1,
+                            "coord2": coord2,
+                            "color": cluster_colors[clusterid],
+                            "radius": radius,
+                        }
+                        if detailed:
+                            entry["pathway_index"] = pathway_index
+                            entry["path_segment_index"] = i
+                            entry["path_number"] = path_number
+                            path_number += 1
+                        properties.append(entry)
                     else:
                         print(
                             f"Ignoring pathway {pathway} as it does not fulfill the coordinate format."
                         )
-        return path_properties
+        return properties
+
+    @staticmethod
+    def precompute_path_properties(json_data: dict) -> list:
+        """Precomputes path properties for quicker visualization in Jupyter notebook.
+
+        Args:
+            json_data (dict): Cluster data with pathways and CA atom coordinates.
+
+        Returns:
+            path_properties (list): List of path properties. Contains clusterid, pathway index, path segment index, coordinates, color, radius, and path number.
+        """
+        return MDPathVisualize._precompute_properties(json_data, detailed=True)
 
     @staticmethod
     def precompute_cluster_properties_quick(json_data: dict) -> list:
@@ -270,46 +250,7 @@ class MDPathVisualize:
         Returns:
             cluster_properties (list): List of cluster properties. Contains clusterid,coordinates, color, and radius.
         """
-        cluster_colors = {}
-        color_index = 0
-        cluster_properties = []
-
-        for clusterid, cluster in json_data.items():
-            cluster_colors[clusterid] = Colors[color_index % len(Colors)]
-            color_index += 1
-            coord_pair_counts = {}
-
-            for pathway_index, pathway in enumerate(cluster):
-                for i in range(len(pathway) - 1):
-                    coord1 = pathway[i][0]
-                    coord2 = pathway[i + 1][0]
-                    if (
-                        isinstance(coord1, list)
-                        and isinstance(coord2, list)
-                        and len(coord1) == 3
-                        and len(coord2) == 3
-                    ):
-                        coord_pair = (tuple(coord1), tuple(coord2))
-                        if coord_pair not in coord_pair_counts:
-                            coord_pair_counts[coord_pair] = 0
-                        coord_pair_counts[coord_pair] += 1
-                        radius = 0.015 + 0.015 * (coord_pair_counts[coord_pair] - 1)
-                        color = cluster_colors[clusterid]
-
-                        cluster_properties.append(
-                            {
-                                "clusterid": clusterid,
-                                "coord1": coord1,
-                                "coord2": coord2,
-                                "color": color,
-                                "radius": radius,
-                            }
-                        )
-                    else:
-                        print(
-                            f"Ignoring pathway {pathway} as it does not fulfill the coordinate format."
-                        )
-        return cluster_properties
+        return MDPathVisualize._precompute_properties(json_data, detailed=False)
 
     @staticmethod
     def remove_non_protein(input_pdb: str, output_pdb: str) -> None:
