@@ -461,6 +461,84 @@ def spline():
     json_file = args.json
     MDPathVisualize.create_splines(json_file)
 
+
+def confidence_spline():
+    """Create a self-contained ChimeraX viewer of the top paths colored by
+    multi-replica confidence.
+
+    Builds ``confidence_paths_chimerax.py`` from the standard MDPath confidence
+    outputs. The paths are drawn as spline tubes where colour encodes confidence
+    (blue = high, red = low), thickness encodes how many paths share a connection
+    (auto-scaled to the structure size), and hovering a path shows its confidence.
+    The structure and geometry are embedded, so the output is a single file you
+    drag onto a ChimeraX window. It can be called using 'mdpath_confidence_spline'
+    after installation.
+
+    Command-line inputs:
+        -paths (str): top_pathways.pkl from the MDPath analysis.
+
+        -coords (str): residue_coordinates.pkl from the MDPath analysis.
+
+        -conf (str): edge_confidence.csv from the MDPath analysis (-confidence run).
+
+        -pdb (str): Structure the paths were computed on (default: first_frame.pdb).
+
+        -top (int): Number of top paths to render (default: 25).
+
+        -o (str): Output ChimeraX .py path (default: confidence_paths_chimerax.py).
+
+        -radiusmin / -radiusmax (float): Override the auto-scaled tube radii (A).
+
+        -scale (float): Multiplier on the auto-scaled tube radii (default: 1.0).
+
+    Command-line usage:
+        $ mdpath_confidence_spline -paths top_pathways.pkl -coords residue_coordinates.pkl -conf edge_confidence.csv
+    """
+    from mdpath.src.path_confidence_viz import ConfidencePathVisualizer
+
+    parser = argparse.ArgumentParser(
+        prog="mdpath_confidence_spline",
+        description="Self-contained ChimeraX viewer of paths colored by confidence.",
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+    parser.add_argument("-paths", dest="paths", help="top_pathways.pkl", required=True)
+    parser.add_argument("-coords", dest="coords", help="residue_coordinates.pkl", required=True)
+    parser.add_argument("-conf", dest="conf", help="edge_confidence.csv", required=True)
+    parser.add_argument("-pdb", dest="pdb", help="Structure file to embed.", default="first_frame.pdb")
+    parser.add_argument("-top", dest="top", help="Number of top paths to render.", default=25)
+    parser.add_argument("-o", dest="out", help="Output ChimeraX .py.", default="confidence_paths_chimerax.py")
+    parser.add_argument("-radiusmin", dest="radiusmin", help="Override min tube radius (A).", default=None)
+    parser.add_argument("-radiusmax", dest="radiusmax", help="Override max tube radius (A).", default=None)
+    parser.add_argument("-scale", dest="scale", help="Multiplier on auto-scaled radii.", default=1.0)
+    args = parser.parse_args()
+
+    with open(args.paths, "rb") as f:
+        top_pathways = pickle.load(f)
+    with open(args.coords, "rb") as f:
+        residue_coordinates = pickle.load(f)
+    edge_confidence_df = pd.read_csv(args.conf)
+
+    summary = ConfidencePathVisualizer.write_chimerax_script(
+        top_pathways,
+        residue_coordinates,
+        edge_confidence_df,
+        pdb_file=args.pdb,
+        out_path=args.out,
+        top_n=int(args.top),
+        radius_min=None if args.radiusmin is None else float(args.radiusmin),
+        radius_max=None if args.radiusmax is None else float(args.radiusmax),
+        scale=float(args.scale),
+    )
+    print(
+        "\033[1mSaved {0} ({1} paths, tube radius {2:.2f}-{3:.2f} A). "
+        "Drag it onto a ChimeraX window.\033[0m".format(
+            summary["out_path"], summary["paths"],
+            summary["radius_min"], summary["radius_max"]
+        )
+    )
+    exit(0)
+
+
 def domain_mi_analysis():
     """
     Analyze mutual information within and between protein domains.
