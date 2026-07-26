@@ -481,6 +481,8 @@ def confidence_spline():
 
         -conf (str): edge_confidence.csv from the MDPath analysis (-confidence run).
 
+        -null (str): Optional edge_null_confidence.csv for null-aware hover text.
+
         -pdb (str): Structure the paths were computed on (default: first_frame.pdb).
 
         -top (int): Number of top paths to render (default: 25).
@@ -502,14 +504,40 @@ def confidence_spline():
         formatter_class=argparse.RawTextHelpFormatter,
     )
     parser.add_argument("-paths", dest="paths", help="top_pathways.pkl", required=True)
-    parser.add_argument("-coords", dest="coords", help="residue_coordinates.pkl", required=True)
+    parser.add_argument(
+        "-coords", dest="coords", help="residue_coordinates.pkl", required=True
+    )
     parser.add_argument("-conf", dest="conf", help="edge_confidence.csv", required=True)
-    parser.add_argument("-pdb", dest="pdb", help="Structure file to embed.", default="first_frame.pdb")
-    parser.add_argument("-top", dest="top", help="Number of top paths to render.", default=25)
-    parser.add_argument("-o", dest="out", help="Output ChimeraX .py.", default="confidence_paths_chimerax.py")
-    parser.add_argument("-radiusmin", dest="radiusmin", help="Override min tube radius (A).", default=None)
-    parser.add_argument("-radiusmax", dest="radiusmax", help="Override max tube radius (A).", default=None)
-    parser.add_argument("-scale", dest="scale", help="Multiplier on auto-scaled radii.", default=1.0)
+    parser.add_argument(
+        "-null", dest="null", help="Optional edge_null_confidence.csv", default=None
+    )
+    parser.add_argument(
+        "-pdb", dest="pdb", help="Structure file to embed.", default="first_frame.pdb"
+    )
+    parser.add_argument(
+        "-top", dest="top", help="Number of top paths to render.", default=25
+    )
+    parser.add_argument(
+        "-o",
+        dest="out",
+        help="Output ChimeraX .py.",
+        default="confidence_paths_chimerax.py",
+    )
+    parser.add_argument(
+        "-radiusmin",
+        dest="radiusmin",
+        help="Override min tube radius (A).",
+        default=None,
+    )
+    parser.add_argument(
+        "-radiusmax",
+        dest="radiusmax",
+        help="Override max tube radius (A).",
+        default=None,
+    )
+    parser.add_argument(
+        "-scale", dest="scale", help="Multiplier on auto-scaled radii.", default=1.0
+    )
     args = parser.parse_args()
 
     with open(args.paths, "rb") as f:
@@ -517,6 +545,7 @@ def confidence_spline():
     with open(args.coords, "rb") as f:
         residue_coordinates = pickle.load(f)
     edge_confidence_df = pd.read_csv(args.conf)
+    edge_null_df = pd.read_csv(args.null) if args.null else None
 
     summary = ConfidencePathVisualizer.write_chimerax_script(
         top_pathways,
@@ -528,12 +557,15 @@ def confidence_spline():
         radius_min=None if args.radiusmin is None else float(args.radiusmin),
         radius_max=None if args.radiusmax is None else float(args.radiusmax),
         scale=float(args.scale),
+        edge_null_df=edge_null_df,
     )
     print(
         "\033[1mSaved {0} ({1} paths, tube radius {2:.2f}-{3:.2f} A). "
         "Drag it onto a ChimeraX window.\033[0m".format(
-            summary["out_path"], summary["paths"],
-            summary["radius_min"], summary["radius_max"]
+            summary["out_path"],
+            summary["paths"],
+            summary["radius_min"],
+            summary["radius_max"],
         )
     )
     exit(0)
@@ -542,22 +574,22 @@ def confidence_spline():
 def domain_mi_analysis():
     """
     Analyze mutual information within and between protein domains.
-    
+
     This function provides a command-line interface (CLI) for analyzing mutual information
     patterns in protein interaction networks, segmented by domains. It calculates both
     intra-domain MI (within domains) and inter-domain MI (between domain pairs).
     It can be called using 'mdpath_domain_mi' after installation.
-    
+
     Command-line inputs:
         -graph (str): Path to the graph.pkl file containing the network (from main workflow)
-        
+
         -config (str): Path to the config.csv file defining domain segmentation (use test example)
-        
+
         -output (str): Path to save the results CSV file (default: './mi_analysis_results.csv')
-    
+
     Command-line usage:
         $ mdpath_domain_mi -graph <path_to_graph.pkl> -config <path_to_config.csv>
-        
+
         $ mdpath_domain_mi -graph <path_to_graph.pkl> -config <path_to_config.csv> -output <output_path>
     """
     parser = argparse.ArgumentParser(
@@ -584,47 +616,49 @@ def domain_mi_analysis():
         default="./mi_analysis_results.csv",
         required=False,
     )
-    
+
     args = parser.parse_args()
-    
+
     if not args.graph or not args.config:
         print("Both -graph and -config are required for domain MI analysis.")
         exit(1)
-    
+
     print(f"Loading graph from {args.graph}...")
     with open(args.graph, "rb") as pkl_file:
         Graph = pickle.load(pkl_file)
-    
+
     print(f"Loading domain configuration from {args.config}...")
     Segmentation = pd.read_csv(args.config)
-    
+
     def parse_residue_range(residue_str):
         """Parse residue range string like '1-50' into tuple (1, 50)"""
-        start, end = residue_str.split('-')
+        start, end = residue_str.split("-")
         return int(start), int(end)
-    
+
     def get_residues_in_domain(domain_row):
         """Get list of residues for a given domain"""
-        start, end = parse_residue_range(domain_row['Residues'])
+        start, end = parse_residue_range(domain_row["Residues"])
         return list(range(start, end + 1))
-    
-    #Build for O(n) lookup 
+
+    # Build for O(n) lookup
     res_to_domain = {}
     domains = {}
     for _, row in Segmentation.iterrows():
-        domain_name = row['Domain']
+        domain_name = row["Domain"]
         residues = get_residues_in_domain(row)
         domains[domain_name] = residues
         for r in residues:
             res_to_domain[r] = domain_name
-    
+
     print(f"\nLoaded {len(domains)} domains:")
     for domain, residues in domains.items():
         print(f"  {domain}: {len(residues)} residues ({min(residues)}-{max(residues)})")
-    
+
     print("\nAnalyzing graph edges...")
     records = []
-    for node1, node2, edge_data in tqdm(Graph.edges(data=True), desc="Processing edges"):
+    for node1, node2, edge_data in tqdm(
+        Graph.edges(data=True), desc="Processing edges"
+    ):
         mi_value = edge_data.get("nmi", edge_data.get("mi", edge_data.get("weight")))
         domain1 = res_to_domain.get(node1)
         domain2 = res_to_domain.get(node2)
