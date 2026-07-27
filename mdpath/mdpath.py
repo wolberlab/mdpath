@@ -21,7 +21,7 @@ import json
 import pickle
 
 from mdpath.src.structure import StructureCalculations, DihedralAngles
-from mdpath.src.mutual_information import NMICalculator
+from mdpath.src.mutual_information import NMICalculator, binning_diagnostic
 from mdpath.src.graph import GraphBuilder
 from mdpath.src.cluster import PatwayClustering
 from mdpath.src.visualization import MDPathVisualize
@@ -217,6 +217,26 @@ def main():
     parser.add_argument("-ddof", type=int, choices=(0, 1), default=0)
     parser.add_argument("-null-outdir", default="null_analysis")
     parser.add_argument(
+        "-hist-range",
+        dest="hist_range",
+        nargs="+",
+        default=["-180", "180"],
+        help="Fixed histogram support for the dihedral-movement histograms, in "
+        "degrees, as two floats (default: -180 180). Fixing the bin edges is what "
+        "makes NMI comparable across replicas, blocks and bootstrap samples. Pass "
+        '"none" to restore the pre-fix behaviour, where each input derived its own '
+        "support from its own extrema.",
+    )
+    parser.add_argument(
+        "-diagnose-bins",
+        dest="diagnose_bins",
+        action="store_true",
+        help="Write binning_diagnostic.csv: per-residue histogram occupancy under "
+        "the chosen support and branch-cut exposure (frames with |dphi| > 180 "
+        "before wrapping). Use it to check whether the fixed support is too wide "
+        "for the observed dihedral movements.",
+    )
+    parser.add_argument(
         "-experimental-c-corr",
         dest="experimental_c_corr",
         action="store_true",
@@ -225,6 +245,15 @@ def main():
     )
 
     args = parser.parse_args()
+    # -hist-range: two floats, or the literal "none" to restore data-derived binning.
+    if len(args.hist_range) == 1 and str(args.hist_range[0]).lower() == "none":
+        hist_range = None
+    elif len(args.hist_range) == 2:
+        hist_range = (float(args.hist_range[0]), float(args.hist_range[1]))
+        if hist_range[0] >= hist_range[1]:
+            raise ValueError("-hist-range needs an increasing (low, high) pair")
+    else:
+        raise ValueError('-hist-range takes two floats or the literal "none"')
     if not args.topology or not args.trajectory:
         print("Both trajectory and topology files are required!")
         exit()
@@ -333,8 +362,16 @@ def main():
             )
     print("\033[1mTrajectory is processed and ready for analysis.\033[0m")
 
+    if args.diagnose_bins:
+        binning_diagnostic(
+            df_all_residues,
+            num_bins=35,
+            hist_range=hist_range,
+            csv_path="binning_diagnostic.csv",
+        )
+
     # Calculate the mutual information and build the graph
-    nmi_calc = NMICalculator(df_all_residues, invert=invert)
+    nmi_calc = NMICalculator(df_all_residues, invert=invert, hist_range=hist_range)
     nmi_calc.entropy_df.to_csv("entropy_df.csv", index=False)
     nmi_calc.nmi_df.to_csv("nmi_df.csv", index=False)
     graph_builder = GraphBuilder(
@@ -354,6 +391,7 @@ def main():
             per_replica_dfs,
             pairs=graph_pairs,
             ddof=args.ddof,
+            hist_range=hist_range,
         )
         edge_conf_df = edge_conf_calc.build_edge_confidence_df()
         edge_conf_df_graph = EdgeConfidenceCalculator.filter_to_graph_edges(
@@ -401,6 +439,7 @@ def main():
                 seed=args.null_seed,
                 ddof=args.ddof,
                 n_jobs=num_parallel_processes,
+                hist_range=hist_range,
             )
             null_outputs = null_calc.run(args.null_outdir, args.null_block_ns)
             status = null_outputs["edge_null_confidence"].corr_status.value_counts(
@@ -471,6 +510,7 @@ def main():
             topology,
             structure_calc.last_res_num,
             graphdist,
+            hist_range=hist_range,
         )
         file_name = "path_confidence_intervals.txt"
         bootstrap_analysis.bootstrap_write(file_name)
