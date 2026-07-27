@@ -14,6 +14,11 @@ estimates the *within-trajectory sampling variability* of the edge stability
 score, so its outputs are best read as a sampling-stability reference rather than
 a formal null distribution.
 
+Per-block and matched-observed values are likewise only comparable under a **fixed
+histogram support** (``hist_range``); with ``None`` each block derives its own bin
+edges and the block-to-block difference in binning is absorbed into the reference as
+if it were sampling noise.
+
 The design sweeps block length ``L`` (ns) and replica count ``R`` so every edge
 is compared at the *same* ``(L, R)`` as the matched observed estimate. For each
 source and ``(L, R)`` the reference is estimated by **resampling** ``draws``
@@ -71,6 +76,7 @@ def _edge_vector(
     frame: pd.DataFrame,
     pairs: Sequence[Pair],
     num_bins: int,
+    hist_range=(-180.0, 180.0),
 ) -> np.ndarray:
     """Computes the per-edge mutual-information difference for a single trajectory block.
 
@@ -85,6 +91,10 @@ def _edge_vector(
 
         num_bins (int): Number of histogram bins for the mutual information calculator.
 
+        hist_range (tuple | None): Fixed ``(low, high)`` histogram support. Blocks are
+            only comparable to each other, and to the matched observed windows, under a
+            shared support; ``None`` restores per-block data-derived binning.
+
     Returns:
         np.ndarray: One MI-difference value per requested pair, ordered like ``pairs``.
     """
@@ -93,6 +103,7 @@ def _edge_vector(
         num_bins=num_bins,
         pairs=pairs,
         show_progress=False,
+        hist_range=hist_range,
     ).nmi_df
 
     lookup = {
@@ -196,8 +207,8 @@ def _source_task(payload: tuple) -> Tuple[pd.DataFrame, List[dict]]:
 
     Args:
         payload (tuple): Packed arguments ``(source_id, source, lengths, r_values,
-            pairs, num_bins, ddof, draws, seed)`` so the task can run inside a
-            worker process.
+            pairs, num_bins, ddof, draws, seed, hist_range)`` so the task can run
+            inside a worker process.
 
     Returns:
         Tuple[pd.DataFrame, List[dict]]: The per-edge reference table (one row per
@@ -216,6 +227,7 @@ def _source_task(payload: tuple) -> Tuple[pd.DataFrame, List[dict]]:
         ddof,
         draws,
         seed,
+        hist_range,
     ) = payload
     n_edges = len(pairs)
     res_u = np.fromiter((pair[0] for pair in pairs), dtype=int, count=n_edges)
@@ -230,7 +242,9 @@ def _source_task(payload: tuple) -> Tuple[pd.DataFrame, List[dict]]:
             )
             for index in range(n_available)
         ]
-        weights = np.vstack([_edge_vector(block, pairs, num_bins) for block in blocks])
+        weights = np.vstack(
+            [_edge_vector(block, pairs, num_bins, hist_range) for block in blocks]
+        )
         for r_null in r_values[block_ns]:
             groups = _block_groups(
                 n_available, r_null, draws, seed, source_id, block_frames
@@ -348,14 +362,14 @@ def _observed_task(payload: tuple) -> Dict[float, np.ndarray]:
 
     Args:
         payload (tuple): Packed arguments ``(frame, lengths, pairs, num_bins,
-            observed_window)`` so the task can run inside a worker process.
+            observed_window, hist_range)`` so the task can run inside a worker process.
 
     Returns:
         Dict[float, np.ndarray]: Mapping from block length in nanoseconds to a
         ``(n_windows, n_edges)`` weight matrix for this replica (a single row in
         ``"leading"`` mode).
     """
-    frame, lengths, pairs, num_bins, observed_window = payload
+    frame, lengths, pairs, num_bins, observed_window, hist_range = payload
     result: Dict[float, np.ndarray] = {}
     for block_ns, block_frames in lengths:
         n_windows = 1 if observed_window == "leading" else len(frame) // block_frames
@@ -426,6 +440,11 @@ class BlockSplitNull:
 
         num_bins (int): Number of histogram bins passed to the MI calculator.
 
+        hist_range (tuple | None): Fixed ``(low, high)`` histogram support passed to the
+            MI calculator. Per-block and matched-observed values are only comparable under
+            a shared support; ``None`` restores per-input data-derived binning and is
+            retained only to reproduce pre-fix numbers.
+
         draws (int): Number of random resampling draws for both the block reference and the matched observed estimate.
 
         seed (int): Seed for the resampling random generators.
@@ -455,6 +474,7 @@ class BlockSplitNull:
         ddof: int = 0,
         n_jobs: int = 1,
         observed_window: str = "random",
+        hist_range=(-180.0, 180.0),
     ) -> None:
         if len(source_dfs) < 1 or len(observed_dfs) < 2:
             raise ValueError(
@@ -493,6 +513,7 @@ class BlockSplitNull:
         self.draws, self.seed, self.ddof = int(draws), int(seed), ddof
         self.n_jobs = max(1, int(n_jobs))
         self.observed_window = observed_window
+        self.hist_range = hist_range
 
         # Feasibility is evaluated per length: a length is usable only if every
         # source yields at least two non-overlapping blocks and every observed
@@ -693,6 +714,7 @@ class BlockSplitNull:
                 self.ddof,
                 self.draws,
                 self.seed,
+                self.hist_range,
             )
             for source_id, source in enumerate(self.sources)
         ]
@@ -720,7 +742,14 @@ class BlockSplitNull:
         ).reset_index()
 
         observed_payloads = [
-            (frame, self.lengths, self.pairs, self.num_bins, self.observed_window)
+            (
+                frame,
+                self.lengths,
+                self.pairs,
+                self.num_bins,
+                self.observed_window,
+                self.hist_range,
+            )
             for frame in self.observed
         ]
         observed_results = self._map(_observed_task, observed_payloads)
@@ -1024,6 +1053,7 @@ class BlockSplitNull:
             "ddof": self.ddof,
             "n_jobs": self.n_jobs,
             "observed_window": self.observed_window,
+            "hist_range": list(self.hist_range) if self.hist_range else None,
             "block_lengths": [
                 {
                     "L_ns": block_ns,
