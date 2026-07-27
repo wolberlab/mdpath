@@ -11,8 +11,18 @@ together with a **finite-replica lower bound** ``c_min`` on that score and a
 These scores measure *consistency of the estimated edge magnitude* across
 replicas; they are not calibrated probabilities, significance thresholds, or
 statements about effect size (an edge with consistently negligible mutual
-information can still score highly). The finite-sampling block reference and its
-experimental corrected score live in :mod:`mdpath.src.null_model`.
+information can still score highly).
+
+.. important::
+
+   Per-replica values are only comparable to each other under a **fixed histogram
+   support**. With ``hist_range=None`` every replica derives its own bin edges from
+   its own extrema, so a single wider excursion in one replica changes that
+   replica's binning and the difference propagates directly into ``MI_std`` ->
+   ``MI_cv`` -> ``confidence``. The default fixed support exists for this reason.
+
+The finite-sampling block reference and its experimental corrected score live in
+:mod:`mdpath.src.null_model`.
 
 Classes
 --------
@@ -43,6 +53,12 @@ class EdgeConfidenceCalculator:
 
         num_bins (int): Number of histogram bins forwarded to the mutual information calculator.
 
+        hist_range (tuple | None): Fixed ``(low, high)`` histogram support forwarded to the
+            mutual information calculator. Per-replica values are only comparable under a
+            fixed support: with ``None`` each replica derives its own bin edges from its own
+            extrema, and that difference flows straight into ``MI_std`` -> ``MI_cv`` ->
+            ``confidence``. ``None`` is retained only to reproduce pre-fix numbers.
+
         pairs: Optional restriction of residue pairs forwarded to the mutual information calculator; ``None`` evaluates all pairs.
 
         ddof (int): Delta degrees of freedom (0 or 1) used for the standard deviation and the finite-replica floor.
@@ -56,6 +72,7 @@ class EdgeConfidenceCalculator:
         num_bins: int = 35,
         pairs=None,
         ddof: int = 0,
+        hist_range=(-180.0, 180.0),
     ) -> None:
         if len(per_replica_dfs) < 2:
             raise ValueError("EdgeConfidenceCalculator requires at least two replicas.")
@@ -64,6 +81,7 @@ class EdgeConfidenceCalculator:
         self.per_replica_dfs = per_replica_dfs
         self.num_bins = num_bins
         self.pairs, self.ddof = pairs, ddof
+        self.hist_range = hist_range
         self.per_replica_nmi_dfs = self._compute_per_replica_nmi()
 
     def _compute_per_replica_nmi(self) -> List[pd.DataFrame]:
@@ -78,6 +96,7 @@ class EdgeConfidenceCalculator:
                 num_bins=self.num_bins,
                 pairs=self.pairs,
                 show_progress=False,
+                hist_range=self.hist_range,
             ).nmi_df
             for frame in self.per_replica_dfs
         ]
