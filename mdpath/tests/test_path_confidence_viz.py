@@ -44,6 +44,28 @@ def _edge_confidence_df():
     )
 
 
+def _edge_null_df():
+    return pd.DataFrame(
+        {
+            "res_u": [1, 2, 3, 3, 3],
+            "res_v": [2, 3, 4, 5, 6],
+            "c_obs": [0.91, 0.82, 0.67, 0.73, 0.58],
+            "c_null_med": [0.88, 0.84, 0.79, 0.77, 0.72],
+            "rho": [0.9, 1.1, 1.4, 1.2, 1.6],
+            "c_corr": [1.0, 0.97, 0.86, 0.91, 0.80],
+        }
+    )
+
+
+def _edge_null_df_with_iqr():
+    """Block-null table that also carries the c_null IQR band and finite-R floor."""
+    df = _edge_null_df()
+    df["c_null_iqr_lo"] = [0.85, 0.80, 0.74, 0.72, 0.66]
+    df["c_null_iqr_hi"] = [0.91, 0.88, 0.83, 0.81, 0.77]
+    df["c_min_R"] = [0.20, 0.20, 0.20, 0.20, 0.20]
+    return df
+
+
 # --------------------------------------------------------------------------- #
 # mock ChimeraX so the generated script can be executed as ChimeraX would     #
 # --------------------------------------------------------------------------- #
@@ -100,10 +122,17 @@ def fake_chimerax(monkeypatch):
         def register_attr(*args, **kwargs):
             pass
 
-    mods = {n: types.ModuleType(n) for n in (
-        "chimerax", "chimerax.core", "chimerax.core.commands",
-        "chimerax.markers", "chimerax.markers.markers", "chimerax.atomic",
-    )}
+    mods = {
+        n: types.ModuleType(n)
+        for n in (
+            "chimerax",
+            "chimerax.core",
+            "chimerax.core.commands",
+            "chimerax.markers",
+            "chimerax.markers.markers",
+            "chimerax.atomic",
+        )
+    }
     mods["chimerax.core.commands"].run = run
     mods["chimerax.core"].commands = mods["chimerax.core.commands"]
     mods["chimerax"].core = mods["chimerax.core"]
@@ -127,9 +156,9 @@ def _run_generated(path):
 # --------------------------------------------------------------------------- #
 def test_conf_lookup_canonicalizes_pairs():
     lut = CPV.conf_lookup_from_df(_edge_confidence_df())
-    assert lut[(1, 2)] == 0.95          # stored as (2, 1)
-    assert lut[(3, 4)] == 0.60          # stored as (4, 3)
-    assert lut[(3, 6)] == 0.55          # stored as (6, 3)
+    assert lut[(1, 2)] == 0.95  # stored as (2, 1)
+    assert lut[(3, 4)] == 0.60  # stored as (4, 3)
+    assert lut[(3, 6)] == 0.55  # stored as (6, 3)
     assert (2, 3) in lut and (3, 5) in lut
 
 
@@ -146,7 +175,7 @@ def test_edge_and_node_confidence_handles_missing_edges():
     lut = CPV.conf_lookup_from_df(_edge_confidence_df())
     # (1,4) and (4,1) are not present -> NaN edge; node lifting is NaN-tolerant
     res, edge, node = CPV.edge_and_node_confidence([1, 4, 5], lut)
-    assert np.isnan(edge[0])             # (1,4) missing
+    assert np.isnan(edge[0])  # (1,4) missing
     assert edge[1] == 0.75 or np.isnan(edge[1])  # (4,5) missing -> NaN
     # node[1] averages the finite neighbours only (here both missing -> NaN)
     assert np.isnan(node[0])
@@ -179,8 +208,8 @@ def test_build_norm_respects_explicit_overrides():
 
 
 def test_build_norm_degenerate_inputs():
-    assert isinstance(CPV.build_norm([]), Normalize)        # empty -> plain 0..1
-    norm_const = CPV.build_norm([0.5, 0.5, 0.5])            # all equal -> no crash
+    assert isinstance(CPV.build_norm([]), Normalize)  # empty -> plain 0..1
+    norm_const = CPV.build_norm([0.5, 0.5, 0.5])  # all equal -> no crash
     assert norm_const.vmin < norm_const.vmax
 
 
@@ -192,8 +221,8 @@ def test_rgb_blue_high_red_low_and_nan():
     norm = CPV.build_norm([0.0, 0.5, 1.0], vmin=0.0, vcenter=0.5, vmax=1.0)
     hi = CPV._rgb(0.95, norm, cmap)
     lo = CPV._rgb(0.05, norm, cmap)
-    assert hi[2] > hi[0]                # high confidence -> blue dominates
-    assert lo[0] > lo[2]               # low confidence  -> red dominates
+    assert hi[2] > hi[0]  # high confidence -> blue dominates
+    assert lo[0] > lo[2]  # low confidence  -> red dominates
     assert CPV._rgb(float("nan"), norm, cmap) == CPV.NAN_RGB
 
 
@@ -216,7 +245,7 @@ def test_auto_radius_scales_with_structure_size():
 def test_auto_radius_clamps_tiny_and_huge():
     tiny = {1: [np.zeros(3)], 2: [np.array([1.0, 0.0, 0.0])]}
     _, rmax_tiny = CPV.auto_radius_range(tiny)
-    assert rmax_tiny == pytest.approx(0.4)                  # lower clamp
+    assert rmax_tiny == pytest.approx(0.4)  # lower clamp
     huge = {1: [np.zeros(3)], 2: [np.array([5000.0, 0.0, 0.0])]}
     _, rmax_huge = CPV.auto_radius_range(huge)
     assert rmax_huge == pytest.approx(CPV.RADIUS_ABS_BOUNDS[1])  # upper clamp
@@ -247,39 +276,60 @@ def test_spline_in_range_and_shape_preserving():
 def test_write_chimerax_script_summary_and_valid_python(tmp_path):
     out = tmp_path / "viewer.py"
     summary = CPV.write_chimerax_script(
-        _top_pathways(), _residue_coordinates(), _edge_confidence_df(),
-        pdb_file="does_not_exist.pdb", out_path=str(out),
-        top_n=3, embed_structure=False,
+        _top_pathways(),
+        _residue_coordinates(),
+        _edge_confidence_df(),
+        pdb_file="does_not_exist.pdb",
+        out_path=str(out),
+        top_n=3,
+        embed_structure=False,
     )
     assert out.exists()
     assert summary["paths"] == 3
     assert summary["sample_points"] == 3 * 70
     assert summary["radius_min"] < summary["radius_max"]
     assert summary["vmin"] <= summary["vcenter"] <= summary["vmax"]
-    compile(out.read_text(), str(out), "exec")    # generated file is valid Python
+    compile(out.read_text(), str(out), "exec")  # generated file is valid Python
 
 
 def test_write_chimerax_script_color_range_follows_input(tmp_path):
     """Two inputs with different confidence ranges -> different colour scales."""
     coords, paths = _residue_coordinates(), [[1, 2, 3, 4]]
-    df_lo = pd.DataFrame({"Residue1": [1, 2, 3], "Residue2": [2, 3, 4],
-                          "confidence": [0.30, 0.40, 0.50]})
-    df_hi = pd.DataFrame({"Residue1": [1, 2, 3], "Residue2": [2, 3, 4],
-                          "confidence": [0.85, 0.90, 0.95]})
-    s_lo = CPV.write_chimerax_script(paths, coords, df_lo,
-                                     out_path=str(tmp_path / "lo.py"),
-                                     top_n=1, embed_structure=False)
-    s_hi = CPV.write_chimerax_script(paths, coords, df_hi,
-                                     out_path=str(tmp_path / "hi.py"),
-                                     top_n=1, embed_structure=False)
-    assert s_hi["vmin"] > s_lo["vmax"]            # scale tracked the input range
+    df_lo = pd.DataFrame(
+        {"Residue1": [1, 2, 3], "Residue2": [2, 3, 4], "confidence": [0.30, 0.40, 0.50]}
+    )
+    df_hi = pd.DataFrame(
+        {"Residue1": [1, 2, 3], "Residue2": [2, 3, 4], "confidence": [0.85, 0.90, 0.95]}
+    )
+    s_lo = CPV.write_chimerax_script(
+        paths,
+        coords,
+        df_lo,
+        out_path=str(tmp_path / "lo.py"),
+        top_n=1,
+        embed_structure=False,
+    )
+    s_hi = CPV.write_chimerax_script(
+        paths,
+        coords,
+        df_hi,
+        out_path=str(tmp_path / "hi.py"),
+        top_n=1,
+        embed_structure=False,
+    )
+    assert s_hi["vmin"] > s_lo["vmax"]  # scale tracked the input range
 
 
 def test_write_chimerax_script_radius_override(tmp_path):
     s = CPV.write_chimerax_script(
-        _top_pathways(), _residue_coordinates(), _edge_confidence_df(),
-        out_path=str(tmp_path / "v.py"), top_n=3, embed_structure=False,
-        radius_min=0.5, radius_max=2.0,
+        _top_pathways(),
+        _residue_coordinates(),
+        _edge_confidence_df(),
+        out_path=str(tmp_path / "v.py"),
+        top_n=3,
+        embed_structure=False,
+        radius_min=0.5,
+        radius_max=2.0,
     )
     assert (s["radius_min"], s["radius_max"]) == (0.5, 2.0)
 
@@ -287,9 +337,13 @@ def test_write_chimerax_script_radius_override(tmp_path):
 def test_write_chimerax_script_raises_without_coordinates(tmp_path):
     df = _edge_confidence_df()
     with pytest.raises(ValueError):
-        CPV.write_chimerax_script([[100, 101]], _residue_coordinates(), df,
-                                  out_path=str(tmp_path / "v.py"),
-                                  embed_structure=False)
+        CPV.write_chimerax_script(
+            [[100, 101]],
+            _residue_coordinates(),
+            df,
+            out_path=str(tmp_path / "v.py"),
+            embed_structure=False,
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -298,13 +352,17 @@ def test_write_chimerax_script_raises_without_coordinates(tmp_path):
 def test_generated_script_builds_marker_model(tmp_path, fake_chimerax):
     out = tmp_path / "viewer.py"
     CPV.write_chimerax_script(
-        _top_pathways(), _residue_coordinates(), _edge_confidence_df(),
-        out_path=str(out), top_n=3, embed_structure=False,
+        _top_pathways(),
+        _residue_coordinates(),
+        _edge_confidence_df(),
+        out_path=str(out),
+        top_n=3,
+        embed_structure=False,
     )
     _run_generated(out)
     markers = fake_chimerax["markers"]
-    assert len(markers) == 3 * 70                       # samples per path
-    assert fake_chimerax["links"] == 3 * 69            # links between samples
+    assert len(markers) == 3 * 70  # samples per path
+    assert fake_chimerax["links"] == 3 * 69  # links between samples
     # hover encoding: residue name + percent number
     assert {m.residue.name for m in markers} == {"CONF"}
     assert all(0 <= m.residue.number <= 100 for m in markers)
@@ -318,15 +376,127 @@ def test_generated_script_builds_marker_model(tmp_path, fake_chimerax):
 
 def test_generated_script_marks_undefined_confidence_gray(tmp_path, fake_chimerax):
     coords = {1: [np.array([0.0, 0.0, 0.0])], 2: [np.array([12.0, 0.0, 0.0])]}
-    df = pd.DataFrame({"Residue1": [7], "Residue2": [8], "confidence": [0.9]})  # no (1,2)
+    df = pd.DataFrame(
+        {"Residue1": [7], "Residue2": [8], "confidence": [0.9]}
+    )  # no (1,2)
     out = tmp_path / "viewer.py"
-    CPV.write_chimerax_script([[1, 2]], coords, df, out_path=str(out),
-                              top_n=1, embed_structure=False)
+    CPV.write_chimerax_script(
+        [[1, 2]], coords, df, out_path=str(out), top_n=1, embed_structure=False
+    )
     _run_generated(out)
     gray = tuple(int(round(0.6 * 255)) for _ in range(3)) + (255,)
     markers = fake_chimerax["markers"]
     assert markers and all(tuple(m.rgba) == gray for m in markers)
-    assert all(m.residue.number is None for m in markers)   # not encoded when undefined
+    assert all(m.residue.number is None for m in markers)  # not encoded when undefined
+
+
+def test_generated_script_hover_includes_exact_edge_null_metrics(
+    tmp_path, fake_chimerax
+):
+    out = tmp_path / "viewer_null.py"
+    CPV.write_chimerax_script(
+        _top_pathways(),
+        _residue_coordinates(),
+        _edge_confidence_df(),
+        out_path=str(out),
+        top_n=3,
+        embed_structure=False,
+        edge_null_df=_edge_null_df(),
+    )
+    _run_generated(out)
+    markers = fake_chimerax["markers"]
+    assert markers and {m.residue.name for m in markers} == {"MDP"}
+    assert all(
+        "_O" in m.name and "_N" in m.name and "_R" in m.name and "_C" in m.name
+        for m in markers
+    )
+    assert all(
+        hasattr(m, "mdpath_c_null") and hasattr(m, "mdpath_rho") for m in markers
+    )
+    assert {m.mdpath_edge for m in markers} <= {"1-2", "2-3", "3-4", "3-5", "3-6"}
+
+
+def test_generated_script_hover_includes_null_iqr_band_and_finite_r_floor(
+    tmp_path, fake_chimerax
+):
+    out = tmp_path / "viewer_null_iqr.py"
+    CPV.write_chimerax_script(
+        _top_pathways(),
+        _residue_coordinates(),
+        _edge_confidence_df(),
+        out_path=str(out),
+        top_n=3,
+        embed_structure=False,
+        edge_null_df=_edge_null_df_with_iqr(),
+    )
+    _run_generated(out)
+    markers = [m for m in fake_chimerax["markers"] if m.residue.name == "MDP"]
+    assert markers
+    # the c_null median is followed by its [lo-hi] IQR band and an _F floor token
+    assert all("_N" in m.name and "[" in m.name and "]" in m.name for m in markers)
+    assert all("_F" in m.name.split("_C")[-1] for m in markers)
+    assert all(
+        hasattr(m, "mdpath_c_null_iqr_lo")
+        and hasattr(m, "mdpath_c_null_iqr_hi")
+        and hasattr(m, "mdpath_c_min_r")
+        for m in markers
+    )
+    # a marker with a known edge carries the exact band and floor it was given
+    edge_12 = next(m for m in markers if m.mdpath_edge == "1-2")
+    assert edge_12.mdpath_c_null_iqr_lo == pytest.approx(0.85)
+    assert edge_12.mdpath_c_null_iqr_hi == pytest.approx(0.91)
+    assert edge_12.mdpath_c_min_r == pytest.approx(0.20)
+
+
+def test_null_lookup_tolerates_missing_iqr_and_floor_columns():
+    # the plain (non-block) null table has no IQR/floor columns; the lookup must
+    # still work and simply fill those optional slots with NaN.
+    lut = CPV.null_lookup_from_df(_edge_null_df())
+    assert lut[(1, 2)][:2] == pytest.approx((0.91, 0.88))
+    assert np.isnan(lut[(1, 2)][2]) and np.isnan(lut[(1, 2)][3])  # iqr lo/hi
+    assert np.isnan(lut[(1, 2)][6])  # c_min_R
+
+
+def test_c_corr_viewer_grays_unresolved_edges(tmp_path, fake_chimerax):
+    # edge (2,3) has NaN c_corr_experimental -> its whole segment must be gray,
+    # not the interpolated color of the resolved (1,2) edge.
+    df = pd.DataFrame(
+        {
+            "res_u": [1, 2],
+            "res_v": [2, 3],
+            "c_obs": [0.90, 0.80],
+            "c_null_med": [0.85, 0.82],
+            "rho": [1.2, 0.9],
+            "c_corr_experimental": [0.95, np.nan],
+            "c_min_R": [0.4, 0.4],
+        }
+    )
+    coords = {
+        1: [np.zeros(3, np.float32)],
+        2: [np.array([10, 0, 0], np.float32)],
+        3: [np.array([20, 5, 0], np.float32)],
+    }
+    ec = pd.DataFrame(
+        {"Residue1": [1, 2], "Residue2": [2, 3], "confidence": [0.9, 0.8]}
+    )
+    out = tmp_path / "vc.py"
+    CPV.write_chimerax_script(
+        [[1, 2, 3]],
+        coords,
+        ec,
+        out_path=str(out),
+        top_n=1,
+        embed_structure=False,
+        edge_null_df=df,
+        color_by="c_corr",
+    )
+    _run_generated(out)
+    gray = tuple(int(round(0.6 * 255)) for _ in range(3)) + (255,)
+    markers = fake_chimerax["markers"]
+    e23 = [m for m in markers if getattr(m, "mdpath_edge", None) == "2-3"]
+    e12 = [m for m in markers if getattr(m, "mdpath_edge", None) == "1-2"]
+    assert e23 and all(tuple(m.rgba) == gray for m in e23)  # unresolved -> gray
+    assert e12 and not all(tuple(m.rgba) == gray for m in e12)  # resolved -> colored
 
 
 # --------------------------------------------------------------------------- #
@@ -345,12 +515,25 @@ def test_confidence_spline_cli(tmp_path, monkeypatch):
     _edge_confidence_df().to_csv(conf_csv, index=False)
     out = tmp_path / "cli_viewer.py"
 
-    monkeypatch.setattr(sys, "argv", [
-        "mdpath_confidence_spline",
-        "-paths", str(paths_pkl), "-coords", str(coords_pkl),
-        "-conf", str(conf_csv), "-o", str(out),
-        "-top", "3", "-pdb", "no_such_structure.pdb",
-    ])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "mdpath_confidence_spline",
+            "-paths",
+            str(paths_pkl),
+            "-coords",
+            str(coords_pkl),
+            "-conf",
+            str(conf_csv),
+            "-o",
+            str(out),
+            "-top",
+            "3",
+            "-pdb",
+            "no_such_structure.pdb",
+        ],
+    )
     from mdpath.mdpath_tools import confidence_spline
 
     with pytest.raises(SystemExit) as exc:

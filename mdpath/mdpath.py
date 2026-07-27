@@ -27,6 +27,7 @@ from mdpath.src.cluster import PatwayClustering
 from mdpath.src.visualization import MDPathVisualize
 from mdpath.src.bootstrap import BootstrapAnalysis
 from mdpath.src.confidence import EdgeConfidenceCalculator
+from mdpath.src.null_model import BlockSplitNull
 from mdpath.src.path_confidence_viz import ConfidencePathVisualizer
 
 
@@ -60,7 +61,11 @@ def _select_subsystem(topology, trajectories, selection, prefix, label):
     print(
         f"{label} selected for {len(new_trajectories)} trajectory file(s) and will now be analyzed."
     )
-    return out_topology, new_trajectories, mda.Universe(out_topology, new_trajectories[0])
+    return (
+        out_topology,
+        new_trajectories,
+        mda.Universe(out_topology, new_trajectories[0]),
+    )
 
 
 def main():
@@ -191,8 +196,32 @@ def main():
         "Produces edge_confidence.csv (all graph edges), top_paths_edge_confidence.csv "
         "(consecutive transitions along the top pathways), and confidence_paths_chimerax.py "
         "(a self-contained ChimeraX viewer of the top paths colored by confidence).",
-        required=False,
-        default=False,
+        action="store_true",
+    )
+    parser.add_argument(
+        "-null",
+        dest="null_model",
+        choices=("none", "block"),
+        default="none",
+        help="Contiguous block-split reference for replica confidence.",
+    )
+    parser.add_argument("-null-block-ns", type=float, default=100.0)
+    parser.add_argument("-null-block-sweep", default="25,50,100,250")
+    parser.add_argument(
+        "-null-sources",
+        default="all",
+        help="all or comma-separated 1-based replica IDs",
+    )
+    parser.add_argument("-null-draws", type=int, default=100)
+    parser.add_argument("-null-seed", type=int, default=0)
+    parser.add_argument("-ddof", type=int, choices=(0, 1), default=0)
+    parser.add_argument("-null-outdir", default="null_analysis")
+    parser.add_argument(
+        "-experimental-c-corr",
+        dest="experimental_c_corr",
+        action="store_true",
+        help="Also write an EXPERIMENTAL c_corr-colored ChimeraX viewer (opt-in; "
+        "c_corr is an unvalidated heuristic, rho is the primary comparison).",
     )
 
     args = parser.parse_args()
@@ -208,6 +237,14 @@ def main():
     topology = args.topology
     trajectories = args.trajectory  # list due to nargs="+"
     traj = mda.Universe(topology, trajectories[0])
+    trajectory_dt_ps = float(traj.trajectory.dt)
+    # Capture every replica's timestep from the ORIGINAL inputs: a later -chain or
+    # -segid selection rewrites the trajectories, and those derived files carry a
+    # default timestep, which would make the block-reference check vacuous.
+    replica_dts = [
+        float(mda.Universe(topology, traj_file).trajectory.dt)
+        for traj_file in trajectories
+    ]
     lig_interaction = args.lig_interaction
     bootstrap = args.bootstrap
     fardist = float(args.fardist)
@@ -216,7 +253,7 @@ def main():
     numpath = int(args.numpath)
     invert = bool(args.invert)
     spline = bool(args.spline)
-    confidence = bool(args.confidence)
+    confidence = bool(args.confidence) or args.null_model != "none"
     if confidence and len(trajectories) < 2:
         print(
             "Error: -confidence requires multiple replica trajectories "
@@ -227,16 +264,18 @@ def main():
     # Chain selection
     if args.chain:
         chain = str(args.chain)
-        topology, trajectories, traj = _select_subsystem(
+        topology, selected, traj = _select_subsystem(
             topology, trajectories, f"chainID {chain}", "chain", f"Chain {chain}"
         )
+        trajectories = selected
 
     # Segment ID selection (CHARMM compatibility)
     if args.segid:
         segid = str(args.segid)
-        topology, trajectories, traj = _select_subsystem(
+        topology, selected, traj = _select_subsystem(
             topology, trajectories, f"segid {segid}", "segid", f"Segment {segid}"
         )
+        trajectories = selected
 
     # Write first frame PDB after all selections
     if os.path.exists("first_frame.pdb"):
@@ -258,6 +297,14 @@ def main():
             fardist, "far"
         )
         df_close_res = structure_calc.calculate_residue_suroundings(closedist, "close")
+    if graphdist == closedist:
+        graph_pairs = list(df_close_res.itertuples(index=False, name=None))
+    else:
+        graph_pairs = list(
+            structure_calc.calculate_residue_suroundings(graphdist, "close").itertuples(
+                index=False, name=None
+            )
+        )
 
     per_replica_dfs = None
     if len(trajectories) == 1:
@@ -301,8 +348,13 @@ def main():
     # Per-edge confidence across replicas (multi-replica only, opt-in via -confidence)
     edge_conf_calc = None
     edge_conf_df = None
+    null_outputs = None
     if confidence and per_replica_dfs is not None:
-        edge_conf_calc = EdgeConfidenceCalculator(per_replica_dfs)
+        edge_conf_calc = EdgeConfidenceCalculator(
+            per_replica_dfs,
+            pairs=graph_pairs,
+            ddof=args.ddof,
+        )
         edge_conf_df = edge_conf_calc.build_edge_confidence_df()
         edge_conf_df_graph = EdgeConfidenceCalculator.filter_to_graph_edges(
             edge_conf_df, graph_builder.graph
@@ -311,6 +363,63 @@ def main():
         print(
             "\033[1mPer-edge confidence across replicas saved to edge_confidence.csv\033[0m"
         )
+        if args.null_model == "block":
+            if args.null_sources == "all":
+                source_ids = list(range(len(per_replica_dfs)))
+            else:
+                source_ids = [int(value) - 1 for value in args.null_sources.split(",")]
+                if (
+                    not source_ids
+                    or min(source_ids) < 0
+                    or max(source_ids) >= len(per_replica_dfs)
+                ):
+                    raise ValueError(
+                        "-null-sources contains an invalid 1-based replica ID"
+                    )
+            # The ns->frame conversion assumes a shared timestep; validate the
+            # timesteps captured from the original inputs (see above).
+            if max(replica_dts) - min(replica_dts) > 1e-6 * max(replica_dts):
+                raise ValueError(
+                    "block null requires a shared timestep across replicas; got dt(ps) "
+                    f"in [{min(replica_dts):g}, {max(replica_dts):g}]. Re-sample the "
+                    "trajectories to a common dt or run the sources separately."
+                )
+            sweep = [
+                float(value)
+                for value in args.null_block_sweep.split(",")
+                if value.strip()
+            ]
+            if args.null_block_ns not in sweep:
+                sweep.append(args.null_block_ns)
+            null_calc = BlockSplitNull(
+                [per_replica_dfs[index] for index in source_ids],
+                per_replica_dfs,
+                block_lengths_ns=sweep,
+                frames_per_ns=1000.0 / trajectory_dt_ps,
+                pairs=graph_pairs,
+                draws=args.null_draws,
+                seed=args.null_seed,
+                ddof=args.ddof,
+                n_jobs=num_parallel_processes,
+            )
+            null_outputs = null_calc.run(args.null_outdir, args.null_block_ns)
+            status = null_outputs["edge_null_confidence"].corr_status.value_counts(
+                normalize=True
+            )
+            print(
+                "Block reference (rho is the primary comparison): "
+                f"{status.get('above_reference', 0.0):.1%} above-reference (resolved), "
+                f"{status.get('below_or_equal_reference', 0.0):.1%} below/equal, "
+                f"{status.get('undefined', 0.0):.1%} undefined "
+                "-> experimental c_corr is NaN for all but the resolved edges."
+            )
+            # Anchor the fraction: if the observed windows and the reference blocks
+            # were exchangeable, ~50% of edges would land above the reference. This
+            # is a descriptive comparison, not a controlled false-positive rate.
+            print(
+                "  (chance expectation under exchangeability is ~50%; this is a "
+                "descriptive fraction, not a multiplicity-controlled error rate)"
+            )
 
     MDPathVisualize.visualise_graph(
         graph_builder.graph
@@ -390,6 +499,9 @@ def main():
     # Self-contained ChimeraX viewer of the top paths colored by replica
     # confidence (auto-scaled tube thickness, hover shows the value).
     if confidence and edge_conf_df is not None:
+        edge_null_df = (
+            null_outputs["edge_null_confidence"] if null_outputs is not None else None
+        )
         try:
             conf_vis = ConfidencePathVisualizer.write_chimerax_script(
                 top_pathways,
@@ -397,6 +509,7 @@ def main():
                 edge_conf_df,
                 pdb_file="first_frame.pdb",
                 out_path="confidence_paths_chimerax.py",
+                edge_null_df=edge_null_df,
             )
             print(
                 "\033[1mChimeraX confidence viewer saved to confidence_paths_chimerax.py "
@@ -406,6 +519,32 @@ def main():
             )
         except Exception as exc:
             print(f"Could not generate ChimeraX confidence viewer: {exc}")
+
+        # Optional second viewer, identical hover but colored by the EXPERIMENTAL
+        # matched-window c_corr heuristic. This is opt-in (-experimental-c-corr)
+        # because c_corr is an unvalidated exploratory score; rho and the
+        # production-colored viewer remain the primary outputs.
+        if edge_null_df is not None and args.experimental_c_corr:
+            try:
+                corr_vis = ConfidencePathVisualizer.write_chimerax_script(
+                    top_pathways,
+                    residue_coordinates_dict,
+                    edge_conf_df,
+                    pdb_file="first_frame.pdb",
+                    out_path="confidence_paths_chimerax_experimental_c_corr.py",
+                    edge_null_df=edge_null_df,
+                    color_by="c_corr",
+                )
+                print(
+                    "\033[1mExperimental c_corr ChimeraX viewer saved to "
+                    "confidence_paths_chimerax_experimental_c_corr.py "
+                    "({0} paths; EXPERIMENTAL matched-window heuristic, "
+                    "undefined/below-reference edges gray).\033[0m".format(
+                        corr_vis["paths"]
+                    )
+                )
+            except Exception as exc:
+                print(f"Could not generate experimental c_corr ChimeraX viewer: {exc}")
 
     # Export the cluster pathways for visualization
     updated_dict = MDPathVisualize.apply_backtracking(
