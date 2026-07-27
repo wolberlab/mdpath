@@ -96,12 +96,14 @@ def test_calc_dihedral_angle_movement(mock_dihedral_class):
 @patch("mdpath.src.structure.Pool")  # Mocking multiprocessing Pool
 def test_calculate_dihedral_movement_parallel(mock_pool, mock_traj):
     angles = DihedralAngles(mock_traj, 1, 2, 1)
+    # workers now yield (res_id, movement, branch_cut_crossings)
     mock_pool.return_value.__enter__.return_value.imap_unordered.return_value = [
-        (1, np.array([1, 2]))
+        (1, np.array([1, 2]), 0)
     ]
     df = angles.calculate_dihedral_movement_parallel(num_parallel_processes=1)
     assert isinstance(df, pd.DataFrame)
     assert not df.empty
+    assert df.attrs["branch_cut_crossings"] == {1: 0}
 
 
 class TestCalculateDihedralMovementsMultiTraj:
