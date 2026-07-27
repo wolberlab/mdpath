@@ -225,7 +225,13 @@ class StructureCalculations:
                 f"dihedral data across replicas.\033[0m"
             )
 
-        all_dfs = [df[common_cols] for df in all_dfs]
+        aligned = []
+        for df in all_dfs:
+            attrs = df.attrs.copy()
+            df = df[common_cols].copy()
+            df.attrs = attrs
+            aligned.append(df)
+        all_dfs = aligned
         concatenated = pd.concat(all_dfs, axis=0, ignore_index=True)
         if return_per_replica:
             return concatenated, all_dfs
@@ -258,14 +264,17 @@ class DihedralAngles:
         self.last_res_num = last_res_num
         self.num_residues = num_residues
 
-    def calc_dihedral_angle_movement(self, res_id: int) -> tuple:
-        """Calculates dihedral angle movement for a residue over the course of the MD trajectory.
+    def _calc_dihedral_movement_with_crossings(self, res_id: int) -> tuple:
+        """Calculate wrapped dihedral movement and count branch-cut crossings.
 
         Args:
             res_id (int): Residue number.
 
         Returns:
-            tuple[int, np.ndarray] | None: Tuple of (residue_id, dihedral_angles) if successful, None if failed.
+            tuple[int, np.ndarray, int] | None: ``(residue_id, movement, crossings)``
+            where ``crossings`` is the number of frames whose *unwrapped* difference
+            exceeded 180 degrees, i.e. the residue's exposure to the periodic branch
+            cut. ``None`` if the dihedral could not be calculated.
         """
         try:
             res = self.traj.residues[res_id - self.first_res_num]
@@ -274,13 +283,33 @@ class DihedralAngles:
                 return None
             R = Dihedral(ags).run()
             dihedrals = R.results.angles
-            dihedral_angle_movement = np.diff(dihedrals, axis=0)
-            return res_id, dihedral_angle_movement
+            raw = np.diff(dihedrals, axis=0)
+            # phi is periodic on [-180, 180); an unwrapped difference turns a
+            # small step across the branch cut into a spurious ~360 deg jump,
+            # which then dominates the histogram support for that residue.
+            dihedral_angle_movement = (raw + 180.0) % 360.0 - 180.0
+            crossings = int(np.count_nonzero(np.abs(raw) > 180.0))
+            return res_id, dihedral_angle_movement, crossings
         except (TypeError, AttributeError, IndexError) as e:
             logging.debug(
                 f"Failed to calculate dihedral for residue {res_id}: {str(e)}"
             )
             return None
+
+    def calc_dihedral_angle_movement(self, res_id: int) -> tuple:
+        """Calculates dihedral angle movement for a residue over the course of the MD trajectory.
+
+        The difference is wrapped onto ``[-180, 180)`` because phi is periodic; see
+        :meth:`_calc_dihedral_movement_with_crossings`.
+
+        Args:
+            res_id (int): Residue number.
+
+        Returns:
+            tuple[int, np.ndarray] | None: Tuple of (residue_id, dihedral_angles) if successful, None if failed.
+        """
+        result = self._calc_dihedral_movement_with_crossings(res_id)
+        return None if result is None else result[:2]
 
     def calculate_dihedral_movement_parallel(
         self,
@@ -295,6 +324,7 @@ class DihedralAngles:
             pd.DataFrame: DataFrame with all residue dihedral angle movements.
         """
         collected = []
+        branch_cut_crossings = {}
 
         try:
             with Pool(processes=num_parallel_processes) as pool:
@@ -304,7 +334,7 @@ class DihedralAngles:
                     desc="\033[1mProcessing residue dihedral movements\033[0m",
                 ) as pbar:
                     results = pool.imap_unordered(
-                        self.calc_dihedral_angle_movement,
+                        self._calc_dihedral_movement_with_crossings,
                         range(self.first_res_num, self.last_res_num + 1),
                     )
 
@@ -313,7 +343,8 @@ class DihedralAngles:
                             pbar.update(1)
                             continue
 
-                        res_id, dihedral_data = result
+                        res_id, dihedral_data, crossings = result
+                        branch_cut_crossings[res_id] = crossings
                         try:
                             collected.append(
                                 pd.DataFrame(dihedral_data, columns=[f"Res {res_id}"])
@@ -329,5 +360,8 @@ class DihedralAngles:
             logging.error(f"Parallel processing failed: {str(e)}")
 
         if collected:
-            return pd.concat(collected, axis=1)
+            result = pd.concat(collected, axis=1)
+            # branch-cut exposure per residue, for the binning diagnostic
+            result.attrs["branch_cut_crossings"] = branch_cut_crossings
+            return result
         return pd.DataFrame()
