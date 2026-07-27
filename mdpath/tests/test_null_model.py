@@ -181,8 +181,8 @@ def test_random_observed_windows_use_the_whole_replica(tmp_path):
     # "leading" evaluates one window per replica; "random" evaluates every window
     reps = _windowed_replicas()
     lengths = [(30.0, 30)]
-    lead = _observed_task((reps[0], lengths, [(1, 2)], 8, "leading"))
-    rand = _observed_task((reps[0], lengths, [(1, 2)], 8, "random"))
+    lead = _observed_task((reps[0], lengths, [(1, 2)], 8, "leading", (-180.0, 180.0)))
+    rand = _observed_task((reps[0], lengths, [(1, 2)], 8, "random", (-180.0, 180.0)))
     assert lead[30.0].shape[0] == 1
     assert rand[30.0].shape[0] == len(reps[0]) // 30 == 4
 

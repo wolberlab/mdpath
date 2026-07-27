@@ -37,6 +37,8 @@ class BootstrapAnalysis:
 
         num_bins (int): Number of bins to group dihedral angle movements into for NMI calculation. Defaults to 35.
 
+        hist_range (tuple | None): Fixed ``(low, high)`` histogram support forwarded to the NMI calculation. Each resample otherwise derives its own support, so path-confidence values inherit that inconsistency. Defaults to ``(-180.0, 180.0)``.
+
         common_counts (np.ndarray): Array with the counts of common paths between the original sample and bootstrap samples.
 
         path_confidence_intervals (dict): Dictionary with the confidence intervals for each path.
@@ -53,6 +55,7 @@ class BootstrapAnalysis:
         last_residue: int,
         graphdist: int,
         num_bins: int = 35,
+        hist_range=(-180.0, 180.0),
     ) -> None:
         self.df_all_residues = df_all_residues
         self.df_distant_residues = df_distant_residues
@@ -63,6 +66,7 @@ class BootstrapAnalysis:
         self.last_residue = last_residue
         self.graphdist = graphdist
         self.num_bins = num_bins
+        self.hist_range = hist_range
         self.common_counts, self.path_confidence_intervals = self.bootstrap_analysis()
 
     def create_bootstrap_sample(self, df_dihedral: pd.DataFrame) -> tuple:
@@ -100,7 +104,9 @@ class BootstrapAnalysis:
             bootstrap_pathways (list): List of paths within the bootstrap sample.
         """
         bootstrap_sample = self.create_bootstrap_sample(self.df_all_residues)
-        nmi_calculator = NMICalculator(bootstrap_sample, num_bins=self.num_bins)
+        nmi_calculator = NMICalculator(
+            bootstrap_sample, num_bins=self.num_bins, hist_range=self.hist_range
+        )
         bootstrap_mi_diff = nmi_calculator.nmi_df
         graph = GraphBuilder(
             self.pdb, self.last_residue, bootstrap_mi_diff, self.graphdist
