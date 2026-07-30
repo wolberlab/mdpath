@@ -90,6 +90,9 @@ class StructureCalculations:
             first_res_num (int): First residue number.
 
             last_res_num (int): Last residue number.
+
+        Raises:
+            ValueError: If the file contains no amino acid residues.
         """
         parser = PDB.PDBParser(QUIET=True)
         structure = parser.get_structure("protein", self.pdb)
@@ -102,6 +105,14 @@ class StructureCalculations:
                     first_res_num = res_num
                 if res_num > last_res_num:
                     last_res_num = res_num
+        if first_res_num == float("inf"):
+            # int(inf) raises an OverflowError that says nothing about the cause
+            raise ValueError(
+                f"No amino acid residues found in {self.pdb}. Check that the "
+                "topology passed to -top carries residue information: a "
+                "coordinate-only file such as DCD or XTC leaves every residue "
+                "named UNK, so nothing is recognised as protein."
+            )
         return int(first_res_num), int(last_res_num)
 
     def _build_kdtree(self, dist: float):

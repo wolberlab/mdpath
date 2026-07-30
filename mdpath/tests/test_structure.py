@@ -52,6 +52,16 @@ def test_resid_lookup_survives_numbering_gap():
     assert DihedralAngles(traj, 5, 21, 4)._res_pos == {5: 0, 6: 1, 20: 2, 21: 3}
 
 
+def test_no_amino_acids_raises_clear_error(tmp_path):
+    """A topology with no protein must say so, not raise OverflowError on int(inf)."""
+    pdb = tmp_path / "unk.pdb"
+    pdb.write_text(
+        "ATOM      1  X   UNK X   1       0.000   0.000   0.000  1.00  0.00\nEND\n"
+    )
+    with pytest.raises(ValueError, match="No amino acid residues found"):
+        StructureCalculations(pdb)
+
+
 def test_non_protein_may_reuse_protein_numbering():
     """A ligand or ion numbered like a residue is not a duplicate amino acid."""
     traj = _fake_traj([1, 2, 1], ["ILE", "ALA", "UNK"])
