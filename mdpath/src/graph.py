@@ -20,7 +20,7 @@ from Bio import PDB
 from typing import Tuple
 from multiprocessing import Pool
 from tqdm import tqdm
-from mdpath.src.structure import StructureCalculations
+from mdpath.src.structure import StructureCalculations, is_amino_acid
 
 
 def _max_weight_shortest_path(graph: nx.Graph, source: int, target: int) -> Tuple:
@@ -111,9 +111,7 @@ class GraphBuilder:
         parser = PDB.PDBParser(QUIET=True)
         structure = parser.get_structure("pdb_structure", self.pdb)
         heavy_atoms = {"C", "N", "O", "S"}
-        residues = [
-            res for res in structure.get_residues() if PDB.Polypeptide.is_aa(res)
-        ]
+        residues = [res for res in structure.get_residues() if is_amino_acid(res)]
 
         coords = []
         res_ids = []

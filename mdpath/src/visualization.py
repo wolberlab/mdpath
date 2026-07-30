@@ -25,6 +25,7 @@ import json
 from collections import defaultdict
 from scipy.interpolate import CubicSpline
 from stl import mesh
+from mdpath.src.structure import FORCEFIELD_RESNAME_ALIASES, is_amino_acid
 
 Colors = [
     [0.1216, 0.4667, 0.7059],
@@ -81,9 +82,7 @@ class MDPathVisualize:
         residue_coordinates_dict = {}
         parser = PDB.PDBParser(QUIET=True)
         structure = parser.get_structure("pdb_structure", pdb_file)
-        residues = [
-            res for res in structure.get_residues() if PDB.Polypeptide.is_aa(res)
-        ]
+        residues = [res for res in structure.get_residues() if is_amino_acid(res)]
         for res in tqdm(residues, desc="\033[1mProcessing residues: \033[0m"):
             res_id = res.get_id()[1]
             if res_id <= end:
@@ -306,7 +305,9 @@ class MDPathVisualize:
                 if line.startswith("ATOM"):
                     residue_number = int(line[22:26].strip())
                     b_factor = float(line[60:66].strip())
-                    amino_acid = line[17:20].strip()
+                    amino_acid = line[17:20].strip().upper()
+                    # HSD/HID/CYX/... would silently miss AAMAPPING below
+                    amino_acid = FORCEFIELD_RESNAME_ALIASES.get(amino_acid, amino_acid)
                     if residue_number not in processed_residues:
                         if b_factor > 0.1 and b_factor < 8.99:
                             generic_number = str(f"{b_factor:.2f}").replace(".", "x")

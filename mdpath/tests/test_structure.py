@@ -6,11 +6,56 @@ import MDAnalysis as mda
 from pathlib import Path
 from Bio import PDB
 from io import StringIO
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 from mdpath.src.structure import (
     StructureCalculations,
     DihedralAngles,
+    is_amino_acid,
 )  # Replace 'mymodule' with the actual module name
+
+
+@pytest.mark.parametrize(
+    "resname",
+    ["ALA", "HIS", "hsd", "HSD", "HSE", "HSP", "HID", "HIE", "HIP", "CYX", "ASH"],
+)
+def test_is_amino_acid_accepts_forcefield_names(resname):
+    """Force field protonation variants must not be dropped from the graph."""
+    assert is_amino_acid(resname)
+
+
+@pytest.mark.parametrize("resname", ["POPC", "TIP3", "SOD", "HOH"])
+def test_is_amino_acid_rejects_non_protein(resname):
+    assert not is_amino_acid(resname)
+
+
+def test_is_amino_acid_accepts_biopython_residue():
+    assert is_amino_acid(PDB.Residue.Residue((" ", 1, " "), "HSD", ""))
+
+
+def _fake_traj(resids, resnames=None):
+    """Minimal stand-in for an mda.Universe: only .residues[i].resid/.resname."""
+    resnames = resnames or ["ALA"] * len(resids)
+    residues = [SimpleNamespace(resid=i, resname=n) for i, n in zip(resids, resnames)]
+    return SimpleNamespace(residues=residues)
+
+
+def test_duplicate_resids_are_rejected():
+    """Repeated residue numbers (lost insertion codes) are ambiguous, not silent."""
+    with pytest.raises(ValueError, match="share a residue number"):
+        DihedralAngles(_fake_traj([1, 2, 2, 3]), 1, 3, 3)
+
+
+def test_resid_lookup_survives_numbering_gap():
+    """A gap in numbering must not shift later residues onto the wrong index."""
+    traj = _fake_traj([5, 6, 20, 21])
+    assert DihedralAngles(traj, 5, 21, 4)._res_pos == {5: 0, 6: 1, 20: 2, 21: 3}
+
+
+def test_non_protein_may_reuse_protein_numbering():
+    """A ligand or ion numbered like a residue is not a duplicate amino acid."""
+    traj = _fake_traj([1, 2, 1], ["ILE", "ALA", "UNK"])
+    assert DihedralAngles(traj, 1, 2, 2)._res_pos == {1: 0, 2: 1}
 
 
 @pytest.fixture
@@ -57,15 +102,16 @@ def test_calculate_residue_surroundings_invalid_mode(pdb_file):
 # Mock DihedralAngles for parallel testing
 @pytest.fixture
 def mock_traj():
-    class MockTraj:
-        def __init__(self):
-            self.residues = {1: MockResidue(), 2: MockResidue()}
-
-    class MockResidue:
+    class MockResidue(SimpleNamespace):
         def phi_selection(self):
             return "phi_selection_mock"
 
-    return MockTraj()
+    return SimpleNamespace(
+        residues=[
+            MockResidue(resid=1, resname="ALA"),
+            MockResidue(resid=2, resname="ALA"),
+        ]
+    )
 
 
 def test_dihedral_angles_init(mock_traj):

@@ -23,6 +23,48 @@ from scipy.spatial import cKDTree
 import logging
 
 
+# Bio.PDB.Polypeptide.is_aa() only knows PDB chemical-component names, so it
+# rejects the protonation-state names that MD force fields write (CHARMM HSD/HSP,
+# AMBER HID/HIE/CYX/ASH/...). Residues it rejects are silently dropped from the
+# graph, which loses real amino acids without any warning. It also happens to
+# accept HSE, but as homoserine rather than epsilon-protonated histidine.
+FORCEFIELD_RESNAME_ALIASES = {
+    # CHARMM
+    "HSD": "HIS",
+    "HSE": "HIS",
+    "HSP": "HIS",
+    # AMBER
+    "HID": "HIS",
+    "HIE": "HIS",
+    "HIP": "HIS",
+    "CYX": "CYS",
+    "CYM": "CYS",
+    "ASH": "ASP",
+    "GLH": "GLU",
+    "LYN": "LYS",
+    # GROMOS / misc terminal variants
+    "CYS2": "CYS",
+    "HISA": "HIS",
+    "HISB": "HIS",
+    "HISH": "HIS",
+}
+
+
+def is_amino_acid(residue) -> bool:
+    """Checks whether a residue is an amino acid, including force field variants.
+
+    Args:
+        residue: A ``Bio.PDB`` residue, or a residue name.
+
+    Returns:
+        bool: True for standard amino acids and for force field protonation
+        variants such as ``HSD``, ``HID`` or ``CYX``.
+    """
+    name = residue if isinstance(residue, str) else residue.get_resname()
+    name = name.strip().upper()
+    return PDB.Polypeptide.is_aa(FORCEFIELD_RESNAME_ALIASES.get(name, name))
+
+
 class StructureCalculations:
     """Calculate residue surroundings and distances between residues in a PDB structure.
 
@@ -54,7 +96,7 @@ class StructureCalculations:
         first_res_num = float("inf")
         last_res_num = float("-inf")
         for res in structure.get_residues():
-            if PDB.Polypeptide.is_aa(res):
+            if is_amino_acid(res):
                 res_num = res.id[1]
                 if res_num < first_res_num:
                     first_res_num = res_num
@@ -75,9 +117,7 @@ class StructureCalculations:
         parser = PDB.PDBParser(QUIET=True)
         structure = parser.get_structure("pdb_structure", self.pdb)
         heavy_atoms = {"C", "N", "O", "S"}
-        residues = [
-            res for res in structure.get_residues() if PDB.Polypeptide.is_aa(res)
-        ]
+        residues = [res for res in structure.get_residues() if is_amino_acid(res)]
 
         coords = []
         res_ids = []
@@ -263,6 +303,31 @@ class DihedralAngles:
         self.first_res_num = first_res_num
         self.last_res_num = last_res_num
         self.num_residues = num_residues
+        # Map resid -> position in traj.residues. Never do this by arithmetic:
+        # numbering gaps (missing loops) or repeated resids silently shift every
+        # residue after the discontinuity onto the wrong dihedral.
+        self._res_pos = {}
+        duplicates = []
+        for pos, res in enumerate(traj.residues):
+            # ligands, ions and waters routinely reuse the protein's numbering;
+            # only amino acids become graph nodes, so only they need to be unique
+            if not is_amino_acid(res.resname):
+                continue
+            resid = int(res.resid)
+            if resid in self._res_pos:
+                duplicates.append(resid)
+            else:
+                self._res_pos[resid] = pos
+        if duplicates:
+            raise ValueError(
+                f"{len(duplicates)} amino acid(s) in the topology share a residue "
+                f"number with another (e.g. {sorted(set(duplicates))[:10]}). MDPath "
+                "keys everything by residue number, so this is ambiguous. Usual "
+                "cause: PDB insertion codes (205A, 205B, ...) collapsed onto the "
+                "base number because the topology came from a format without an "
+                "insertion-code field (PSF/GRO). Renumber the residues sequentially "
+                "before running."
+            )
 
     def _calc_dihedral_movement_with_crossings(self, res_id: int) -> tuple:
         """Calculate wrapped dihedral movement and count branch-cut crossings.
@@ -277,7 +342,7 @@ class DihedralAngles:
             cut. ``None`` if the dihedral could not be calculated.
         """
         try:
-            res = self.traj.residues[res_id - self.first_res_num]
+            res = self.traj.residues[self._res_pos[res_id]]
             ags = [res.phi_selection()]
             if not all(ags):
                 return None
@@ -328,14 +393,17 @@ class DihedralAngles:
 
         try:
             with Pool(processes=num_parallel_processes) as pool:
+                # iterate the resids that actually exist, not first..last: a
+                # numbering gap would otherwise queue residues that aren't there
+                res_ids = sorted(self._res_pos)
                 with tqdm(
-                    total=self.num_residues,
+                    total=len(res_ids),
                     ascii=True,
                     desc="\033[1mProcessing residue dihedral movements\033[0m",
                 ) as pbar:
                     results = pool.imap_unordered(
                         self._calc_dihedral_movement_with_crossings,
-                        range(self.first_res_num, self.last_res_num + 1),
+                        res_ids,
                     )
 
                     for result in results:
